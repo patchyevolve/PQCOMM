@@ -1,0 +1,473 @@
+Secure Full-Duplex Post-Quantum SSM Communication System
+Final Engineering Specification v1.0 (LOCKED)
+
+Status: LOCKED
+Document type: Full engineering specification
+Scope: Real-time secure duplex communication system
+Transport: UDP multi-path
+Modes: Audio, Chat, File, Control
+Security: Post-Quantum handshake + symmetric session
+Architecture: Multi-layer locked tunnel with outer defense shells
+
+This document defines the final architecture.
+After this document, structural changes are not allowed.
+
+0. Goals
+
+The system must provide:
+
+Real-time duplex communication
+Low latency audio transmission
+Secure chat and file transfer
+Exclusive session tunnel
+Strong identity verification
+Post-quantum safe handshake
+Low CPU usage in trusted mode
+Resistance to spoof, flood, replay
+Ability to survive packet loss / delay
+Ability to adapt under jamming
+Kernel-level filtering support
+Hardware crypto acceleration support
+Secure key storage
+Automatic key rotation
+Multi-path transport
+Relay / mesh support
+CLI control interface
+
+Non-goals:
+
+anonymity network
+internet routing replacement
+RF hardware layer protection
+defeating physical jamming completely
+1. Design Philosophy
+
+The system follows the trusted pipe model.
+
+Rules:
+
+Trusted packets must move through minimal path.
+Unknown packets must never reach session.
+Outer layers protect link.
+Inner layers carry data.
+Transport may change, session must not.
+
+Principles:
+
+Gate before decrypt
+Decrypt before channel
+Scheduler before encrypt
+Control before audio
+Audio before file
+Outer layers must not see plaintext
+Session must be exclusive
+Handshake must run once
+Fast path must be constant time
+
+2. Threat Model
+
+Attacker may:
+
+send UDP packets
+spoof IP
+replay packets
+flood port
+scan protocol
+delay packets
+drop packets
+reorder packets
+observe traffic
+try identity spoof
+try handshake hijack
+
+Attacker may not:
+
+break AEAD crypto
+break PQ KEM
+read secure memory
+bypass kernel filter locally
+
+Not guaranteed protection against:
+
+full bandwidth saturation
+RF jamming
+ISP blocking
+local OS compromise
+hardware key theft
+3. Global Rules
+
+RULE-1
+Session gate must run before decrypt
+
+RULE-2
+Outer layers must not decrypt payload
+
+RULE-3
+PQ only allowed during handshake
+
+RULE-4
+Trusted packets must bypass offense
+
+RULE-5
+Scheduler must run before encryption
+
+RULE-6
+Audio must never wait for file
+
+RULE-7
+Control must never wait for audio
+
+RULE-8
+No malloc in fast path
+
+RULE-9
+No logging in fast path
+
+RULE-10
+No mutex in audio path
+
+RULE-11
+Packet parsed only once
+
+RULE-12
+Session must be exclusive
+
+RULE-13
+Kernel filter must be first
+
+RULE-14
+Keys must never leave secure store
+
+RULE-15
+Resilience must not change session id
+
+RULE-16
+Replay window must always be active
+
+RULE-17
+Channel must not access transport
+
+RULE-18
+CLI must not access UDP directly
+
+4. System State Machine
+
+States:
+
+INIT
+IDLE
+HANDSHAKE
+VERIFY
+LOCKED
+TRUSTED
+ATTACK
+JAM
+RESYNC
+RECONNECT
+CLOSED
+
+Transitions:
+
+INIT → IDLE
+IDLE → HANDSHAKE
+HANDSHAKE → VERIFY
+VERIFY → LOCKED
+LOCKED → TRUSTED
+TRUSTED → ATTACK
+TRUSTED → JAM
+JAM → RESYNC
+RESYNC → TRUSTED
+TRUSTED → RECONNECT
+RECONNECT → LOCKED
+LOCKED → CLOSED
+
+State rules:
+
+LOCKED = session exists
+TRUSTED = fast path enabled
+ATTACK = offense allowed
+JAM = resilience active
+
+5. Layer Architecture
+
+Order:
+
+OFFENSIVE
+ANTI
+STATIC
+KERNEL FILTER
+SESSION GATE
+RESILIENCE
+CONTROL
+SESSION ENC
+CHANNEL ENC
+CHANNEL
+DATA
+
+Each layer must define:
+
+input
+output
+allowed actions
+forbidden actions
+
+6. Kernel Filter
+
+Purpose:
+
+Drop packets before user space.
+
+Checks:
+
+IP
+Port
+Size
+Protocol
+
+Must be constant time.
+
+Must not decrypt.
+
+7. Static Shell
+
+Checks:
+
+magic
+version
+header size
+flags
+length
+checksum
+
+No crypto.
+No allocation.
+
+8. Session Gate
+
+Checks:
+
+session_id
+peer_ip
+peer_port
+format
+
+Fail → drop immediately.
+
+Must be O(1).
+
+9. Anti-Analysis Layer
+
+Purpose:
+
+Hide metadata
+Detect probing
+
+Actions:
+
+drop
+delay
+fake
+noise
+throttle
+
+Must not modify trusted packets.
+
+10. Offensive Shell
+
+Purpose:
+
+Respond to flood / scan.
+
+Actions:
+
+fake packets
+padding
+decoy handshake
+noise
+rate limit
+
+Must not touch session data.
+
+11. Packet Model
+
+Header fields:
+
+magic
+version
+flags
+session_id
+channel_id
+seq
+nonce
+length
+tag
+
+Rules:
+
+seq must increase
+nonce must not repeat
+length must match
+tag must verify
+
+12. Session Protocol
+
+Handshake:
+
+HELLO
+PQ KEM
+Shared secret
+Encrypted identity
+Signature verify
+Key derive
+Lock
+
+After lock:
+
+Symmetric only.
+
+Rotation allowed.
+
+13. Channel System
+
+Channels:
+
+1 CONTROL
+2 AUDIO
+3 CHAT
+4 FILE
+5 ROUTE
+
+Each channel has:
+
+channel_seq
+channel_key
+
+Must not block other channels.
+
+14. Scheduler
+
+Queues:
+
+control
+audio
+chat
+file
+fake
+
+Priority:
+
+control > audio > chat > file > fake
+
+Runs before encryption.
+
+15. Thread Model
+
+Threads:
+
+rx
+tx
+crypto
+control
+resilience
+monitor
+audio
+cli
+
+Communication via lock-free queues.
+
+No blocking between threads.
+
+16. Resilience System
+
+Handles:
+
+multipath
+relay
+FEC
+port hop
+reconnect
+adaptive bitrate
+
+Must not change session id.
+
+17. Key Management
+
+Keys:
+
+master
+session
+channel
+
+Rules:
+
+store in secure memory
+zero after use
+no swap
+no log
+
+Rotation must not stop stream.
+
+18. Performance Constraints
+
+Audio latency < 20 ms
+CPU < 15% normal
+Packet rate ≥ 1000/s
+Loss tolerance ≥ 30% with FEC
+No allocation in fast path
+
+19. Security Guarantees
+
+Protected:
+
+payload
+identity
+session
+channel
+replay
+spoof
+MITM
+scan
+
+Not guaranteed:
+
+RF jam
+full DoS
+local root attack
+
+20. CLI + Chat
+
+CLI commands:
+
+connect
+disconnect
+status
+chat
+sendfile
+bitrate
+cover
+rekey
+hop
+relay
+quit
+
+Chat channel must be encrypted.
+Chat must not block audio.
+
+21. Implementation Constraints
+
+single parse
+zero copy
+fixed buffers
+constant time
+no malloc fast path
+no log fast path
+gate before decrypt
+scheduler before encrypt
+
+22. Final Status
+
+Architecture = LOCKED
+Specification = FINAL
+Ready for implementation
+
+Phase 1 wire contract reference: transport/PHASE1_WIRE_CONTRACT.md
