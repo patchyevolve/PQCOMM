@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 
 //kem algo types
 #define KEM_TYPE_NONE 0
@@ -31,7 +32,7 @@ int kem_init(kem_context_t *ctx, uint8_t type);
 
 //genertate key pair
 //returns 0 on success, -1 on error
-int kem_keypair(kem_context_t *ctx
+int kem_keypair(kem_context_t *ctx,
                 uint8_t* public_key, uint32_t* pk_size,
                 uint8_t* secret_key, uint32_t* sk_size);
 

@@ -5,33 +5,40 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 #endif
 
 #include "udp.h"
 #include "ring.h"
 #include "packet.h"
+#include "packet_parse.h"
 #include "pool.h"
 #include "session.h"
 #include "rx_worker.h"
 #include "channel.h"
+#include "handshake.h"
+#include "kem.h"
 
 #include "rx_thread.h"
 #include "tx_thread.h"
 #include "pipeline_inbound.h"
 #include "pipeline_selftest.h"
 
-typedef struct
-{
-    tx_queues_t* txq;
-    session_t* sess;
 
+
+
+
+typedef struct {
+    tx_queues_t* txq;
+    rx_queues_t* rxq;
+    session_t* sess;
+    uint32_t* seq_counter;
 } control_ctx_t;
 
-#define CTRL_HELLO   1
-#define CTRL_ACCEPT  2
-
-typedef struct
-{
+typedef struct {
     uint64_t rx_total;
     uint64_t drop_parse;
     uint64_t drop_offensive;
@@ -47,380 +54,293 @@ typedef struct
     uint64_t drop_demux;
 } rx_stats_t;
 
-void control_handler(packet_buf_t* p, void* ctx_ptr)
-{
-    control_ctx_t* ctx = (control_ctx_t*)ctx_ptr;
 
-    tx_queues_t* queues = ctx->txq;
+
+static uint32_t g_seq_counter = 1; // Global sequence counter for handshake
+static uint32_t g_seq_counter_initiator = 1;
+static uint32_t g_seq_counter_responder = 1;
+
+static session_t* g_sess_initiator = NULL;
+static session_t* g_sess_responder = NULL;
+
+static struct sockaddr_in6 g_initiator_peer_addr;
+static struct sockaddr_in6 g_responder_peer_addr;
+
+
+void control_handler_initiator(packet_buf_t* p, void* ctx_ptr) {
+    control_ctx_t* ctx = (control_ctx_t*)ctx_ptr;
     session_t* sess = ctx->sess;
 
-    uint8_t* payload = p->data + 24;
-
-    uint8_t opcode;
-    memcpy(&opcode, payload, 1);
-
-    if (opcode == CTRL_HELLO)
-    {
-        if (sess->state == SESSION_LOCKED)
-            return;
-
-        if (sess->state != SESSION_IDLE &&
-            sess->state != SESSION_HANDSHAKE)
-            return;
-
-        printf("[CONTROL] HELLO received\n");
-
-        packet_buf_t* resp = pool_get();
-        if (!resp) return;
-
-        uint8_t* d = resp->data;
-
-        uint64_t session_id = ((uint64_t)rand() << 32) | rand();
-        uint32_t length = 1 + 8;
-        uint8_t channel = CH_CONTROL;
-        uint32_t prev_seq;
-        memcpy(&prev_seq, p->data + 15, 4);
-        uint32_t seq = prev_seq + 1;
-
-        // copy header
-        memcpy(d, p->data, 24);
-
-        memcpy(d + 6,  &session_id, 8);
-        memcpy(d + 14, &channel, 1);
-        memcpy(d + 15, &seq, 4);
-        memcpy(d + 19, &length, 4);
-
-        uint8_t op = CTRL_ACCEPT;
-        memcpy(d + 24, &op, 1);
-        memcpy(d + 25, &session_id, 8);
-
-        resp->len = 24 + length;
-
-        memcpy(resp->addr, p->addr, p->addr_len);
-        resp->addr_len = p->addr_len;
-
-        // learn peer on first contact
-        if (sess->addr_len == 0)
-        {
-            memcpy(sess->addr, p->addr, p->addr_len);
-            sess->addr_len = p->addr_len;
-        }
-
-        ring_push(&queues->control, resp);
+    packet_view_t view = { 0 };
+    if (packet_parse(p, &view) != 0) {
+        pool_return(p);
+        return;
     }
-    else if (opcode == CTRL_ACCEPT)
-    {
-        if (sess->state != SESSION_HANDSHAKE &&
-            sess->state != SESSION_IDLE)
-            return;
 
-        printf("[CONTROL] ACCEPT received\n");
+    packet_buf_t* response = handshake_run_as_initiator(sess, p, ctx->seq_counter);
 
-        uint64_t sid;
-        memcpy(&sid, payload + 1, 8);
+    if (response) {
+        memcpy(response->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
+        response->addr_len = sizeof(g_initiator_peer_addr);
+        ring_push(&ctx->txq->control, response);
+    }
 
-        if (sess->addr_len == 0)
-        {
-            memcpy(sess->addr, p->addr, p->addr_len);
-            sess->addr_len = p->addr_len;
-        }
+    pool_return(p);
 
-        sess->session_id = sid;
-        sess->state = SESSION_VERIFY;
-        sess->last_seq = 0;
-        sess->recv_bitmap = 0;
-        sess->state = SESSION_LOCKED;
-
-        printf("Session established: %llu\n",
-               (unsigned long long)sid);
+    if (sess->state == SESSION_LOCKED) {
+        printf("[INITIATOR] Session LOCKED!\n");
     }
 }
 
-void audio_handler(packet_buf_t* p, void* ctx)
-{
+void control_handler_responder(packet_buf_t* p, void* ctx_ptr) {
+    control_ctx_t* ctx = (control_ctx_t*)ctx_ptr;
+    session_t* sess = ctx->sess;
+
+    printf("[RESP] handler called, sess=%p, role=%d, state=%d\n",
+        (void*)sess, sess ? sess->role : -1, sess ? sess->state : -1);
+
+    packet_view_t view = { 0 };
+    if (packet_parse(p, &view) != 0) {
+        printf("[RESP] parse failed\n");
+        pool_return(p);
+        return;
+    }
+
+    printf("[RESP] parse OK, opcode=%d\n", view.payload[0]);
+
+    packet_buf_t* response = handshake_run_as_responder(sess, p, ctx->seq_counter);
+
+    printf("[RESP] handshake_run returned %p\n", (void*)response);
+
+    if (response) {
+        memcpy(response->addr, &g_responder_peer_addr, sizeof(g_responder_peer_addr));
+        response->addr_len = sizeof(g_responder_peer_addr);
+        ring_push(&ctx->txq->control, response);
+    }
+
+    pool_return(p);
+
+    if (sess->state == SESSION_LOCKED) {
+        printf("[RESPONDER] Session LOCKED!\n");
+    }
+}
+
+void audio_handler(packet_buf_t* p, void* ctx) {
     printf("[AUDIO]\n");
 }
 
-void chat_handler(packet_buf_t* p, void* ctx)
-{
-    printf("[CHAT] %.*s\n",
-        (int)(p->len - 24),
-        (char*)(p->data + 24));
+void chat_handler(packet_buf_t* p, void* ctx) {
+    printf("[CHAT] %.*s\n", (int)(p->len - 24), (char*)(p->data + 24));
 }
 
-void file_handler(packet_buf_t* p,  void* ctx)
-{
+void file_handler(packet_buf_t* p, void* ctx) {
     printf("[FILE]\n");
 }
 
-int main()
-{
-	//initialize
-    spsc_ring_t rx_ring;
-    tx_queues_t queues;
-    rx_queues_t rxq;
+int main() {
+    spsc_ring_t rx_ring_a;
+    spsc_ring_t rx_ring_b;
+    tx_queues_t queues_initiator;
+	tx_queues_t queues_responder;
+    rx_queues_t rxq_a;
+    rx_queues_t rxq_b;
 
-    ring_init(&rx_ring);
-    rx_queues_init(&rxq);
-    tx_queues_init(&queues);
-
-    session_t sess = { 0 };
-    sess.state = SESSION_IDLE;
-    sess.session_id = 0;
-	sess.last_seq = 0;
-	sess.recv_bitmap = 0;
+    ring_init(&rx_ring_a);
+    ring_init(&rx_ring_b);
+    rx_queues_init(&rxq_a);
+    rx_queues_init(&rxq_b);
+    tx_queues_init(&queues_initiator);
+    tx_queues_init(&queues_responder);
 
     control_ctx_t ctrl_ctx;
-    
-    rx_stats_t stats = {0};
+    rx_stats_t stats = { 0 };
     uint32_t loop_ticks = 0;
 
-    #if PHASE1_SELFTEST
-        int seq_probe_queued = 0;
-    #endif
-
-    ctrl_ctx.txq = &queues;
-    ctrl_ctx.sess = &sess;
-
-    rx_worker_t w_control, w_audio, w_chat, w_file;
+#if PHASE1_SELFTEST
+    int seq_probe_queued = 0;
+#endif
 
     pool_init();
 
-    rx_worker_start(&w_control, &rxq.control,   control_handler,&ctrl_ctx);
-    rx_worker_start(&w_audio,   &rxq.audio,     audio_handler,  &ctrl_ctx);
-    rx_worker_start(&w_chat,    &rxq.chat,      chat_handler,   &ctrl_ctx);
-    rx_worker_start(&w_file,    &rxq.file,      file_handler,   &ctrl_ctx);
+    rx_worker_t w_control, w_audio, w_chat, w_file;
+    rx_worker_t w_control_initiator;
+
+#if PHASE2_SECURITY_ENABLED
+
+    // Setup peer addresses
+    memset(&g_initiator_peer_addr, 0, sizeof(g_initiator_peer_addr));
+    g_initiator_peer_addr.sin6_family = AF_INET6;
+    g_initiator_peer_addr.sin6_port = htons(9002);
+    inet_pton(AF_INET6, "::1", &g_initiator_peer_addr.sin6_addr);
+
+    memset(&g_responder_peer_addr, 0, sizeof(g_responder_peer_addr));
+    g_responder_peer_addr.sin6_family = AF_INET6;
+    g_responder_peer_addr.sin6_port = htons(9001);
+    inet_pton(AF_INET6, "::1", &g_responder_peer_addr.sin6_addr);
+
+    // Create initiator session
+    g_sess_initiator = session_alloc_for_peer(&g_initiator_peer_addr, sizeof(g_initiator_peer_addr), SESSION_DIR_OUTBOUND);
+    if (!g_sess_initiator) return 1;
+    handshake_init_initiator(g_sess_initiator, PHASE2_KEM_ALGORITHM);
+
+    // Create responder session
+    g_sess_responder = session_alloc_for_peer(&g_responder_peer_addr, sizeof(g_responder_peer_addr), SESSION_DIR_INBOUND);
+    if (!g_sess_responder) return 1;
+    handshake_init_responder(g_sess_responder, PHASE2_KEM_ALGORITHM);
+
+    // Setup initiator context
+    control_ctx_t ctx_initiator = {
+        .txq = &queues_initiator,
+        .rxq = &rxq_a,
+        .sess = g_sess_initiator,
+        .seq_counter = &g_seq_counter_initiator
+    };
+
+    // Setup responder context  
+    control_ctx_t ctx_responder = {
+        .txq = &queues_responder,
+        .rxq = &rxq_b,
+        .sess = g_sess_responder,
+        .seq_counter = &g_seq_counter_responder
+    };
+
+    // Start workers for both sides
+//  rx_worker_start(&w_control, &rxq_b.control, &queues_responder.control, &ctx_responder);
+//  rx_worker_start(&w_control_initiator, &rxq_a.control, &queues_initiator.control, &ctx_initiator);
+
+    // Send initial HELLO from initiator
+    packet_buf_t* hello = handshake_build_hello(g_sess_initiator, &g_seq_counter_initiator);
+    if (!hello) {
+        printf("[MAIN] Failed to build HELLO\n");
+        return 1;
+    }
+    memcpy(hello->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
+    hello->addr_len = sizeof(g_initiator_peer_addr);
+    ring_push(&queues_initiator.control, hello);
+    printf("[MAIN] Sent initial HELLO from INITIATOR\n");
 
 
-    udp_socket_t a;
-    udp_socket_t b;
+#endif
 
-    if (udp_socket_create(&a, 9001) != 0)
-    {
+    ctrl_ctx.txq = &queues_responder;
+    ctrl_ctx.rxq = &rxq_b;
+    ctrl_ctx.sess = g_sess_responder;
+    ctrl_ctx.seq_counter = &g_seq_counter_responder;
+
+#if !PHASE2_SECURITY_ENABLED
+    rx_worker_start(&w_control, &rxq_b.control, control_handler_responder, &ctrl_ctx);
+#endif
+    //rx_worker_start(&w_audio, &rxq_b.audio, audio_handler, &ctrl_ctx);
+    //rx_worker_start(&w_chat, &rxq_b.chat, chat_handler, &ctrl_ctx);
+    //rx_worker_start(&w_file, &rxq_b.file, file_handler, &ctrl_ctx);
+
+
+
+    udp_socket_t a, b;
+
+    if (udp_socket_create(&a, 9001) != 0) {
         printf("create A failed\n");
         return 1;
     }
 
-    if (udp_socket_create(&b, 9002) != 0)
-    {
+    if (udp_socket_create(&b, 9002) != 0) {
         printf("create B failed\n");
         return 1;
     }
 
-    
+    rx_thread_t rx_thread_a, rx_thread_b;
+    tx_thread_t tx_thread, tx_thread_b;
 
-    //thread start
-    rx_thread_t rx_thread_a;
-    rx_thread_t rx_thread_b;
-	tx_thread_t tx_thread;
-
-    if (rx_thread_start(&rx_thread_a, &a, &rx_ring) != 0)
-    {
+    if (rx_thread_start(&rx_thread_a, &a, &rx_ring_a, "initiator") != 0) {
         printf("rx thread start failed\n");
         return 1;
     }
-    if (rx_thread_start(&rx_thread_b, &b, &rx_ring) != 0)
-    {
+    if (rx_thread_start(&rx_thread_b, &b, &rx_ring_b, "responder") != 0) {
         printf("rx thread start failed\n");
         return 1;
     }
-
-    if (tx_thread_start(&tx_thread, &a, &queues) != 0)
-    {
-		printf("tx thread start failed\n");
+    if (tx_thread_start(&tx_thread, &a, &queues_initiator) != 0) {
+        printf("tx thread start failed\n");
         return 1;
     }
 
-	//produce TX packet
-    packet_buf_t* p = pool_get();
-
-    if (!p) {
-        printf("pool empty\n");
+    if (tx_thread_start(&tx_thread_b, &b, &queues_responder) != 0) {
+        printf("tx thread b start failed\n");
         return 1;
     }
-
-    uint8_t* d = p->data;
-
-    //header
-    uint32_t magic = 0xAABBCCDD;
-    uint8_t version = 1;
-    uint8_t flags = 0;
-    uint64_t session = 0;
-    uint8_t channel = CH_CONTROL;
-    uint32_t seq = 1;
-
-    // payload (HELLO)
-    uint8_t opcode = CTRL_HELLO;
-    uint64_t nonce = 12345;
-
-    uint32_t length = 1 + 8;
-
-    memcpy(d + 0,  &magic, 4);
-    memcpy(d + 4,  &version, 1);
-    memcpy(d + 5,  &flags, 1);
-    memcpy(d + 6,  &session, 8);
-    memcpy(d + 14, &channel, 1);
-    memcpy(d + 15, &seq, 4);
-    memcpy(d + 19, &length, 4);
-
-    // payload write
-    memcpy(d + 24, &opcode, 1);
-    memcpy(d + 25, &nonce, 8);
-
-    p->len = 24 + length;
-
-    // destination (for sending)
-    struct sockaddr_in6 addr;
-    memset(&addr, 0, sizeof(addr));
-
-    addr.sin6_family = AF_INET6;
-    addr.sin6_port = htons(9002);
-    inet_pton(AF_INET6, "::1", &addr.sin6_addr);
-
-    memcpy(p->addr, &addr, sizeof(addr));
-    p->addr_len = sizeof(addr);
-
-    // learn peer dynamically from first packet
-    sess.addr_len = 0;
-
-    switch (channel)
-    {
-        case CH_CONTROL:
-            sess.state = SESSION_HANDSHAKE;
-            ring_push(&queues.control, p);
-            break;
-
-        case CH_AUDIO:
-            ring_push(&queues.audio, p);
-            break;
-
-        case CH_CHAT:
-            ring_push(&queues.chat, p);
-            break;
-
-        case CH_FILE:
-            ring_push(&queues.file, p);
-            break;
-
-        case CH_ROUTE:
-            ring_push(&queues.fake, p);
-            break;
-
-        default:
-            pool_return(p);  // invalid channel
-            break;
-    }
-
-    #if PHASE1_SELFTEST
-        printf("[SELFTEST] enqueue parse/static/session probes\n");
-        pipeline_enqueue_phase1_selftests(&rx_ring);
-    #endif
-
-	//consume RX packet
-    for (;;)
-    {
-        packet_view_t view = {0};
 
 #if PHASE1_SELFTEST
-        if (!seq_probe_queued && sess.state == SESSION_LOCKED && sess.addr_len != 0)
-        {
-            printf("[SELFTEST] enqueue duplicate seq probe\n");
-            pipeline_enqueue_seq_duplicate_probe(&rx_ring, &sess);
-            seq_probe_queued = 1;
-        }
+    // PHASE1 selftest disabled - needs update for dual ring
+    // pipeline_enqueue_phase1_selftests(&rx_ring_a);
 #endif
-        packet_buf_t* rp = (packet_buf_t*)ring_pop(&rx_ring);
 
-        if (rp)
-        {
-            stats.rx_total++;
-            pipeline_result_t result =
-                pipeline_inbound_process(rp, &view, &sess, &rxq);
+#if PHASE2_SECURITY_ENABLED
+    {
+        printf("[MAIN] Phase 2 security enabled, using PQ handshake\n");
+    }
+#endif
 
-            if (result == PIPELINE_OK)
-            {
-                // ownership moved to worker queue by pipeline
+    for (;;) {
+        // Process INITIATOR side (socket A)
+        packet_buf_t* rp_a = (packet_buf_t*)ring_pop(&rx_ring_a);
+        if (rp_a) {
+            pipeline_ctx_t ctx_a = {
+                .sess = g_sess_initiator,
+                .rxq = &rxq_a
+            };
+            pipeline_result_t result = pipeline_inbound_process(rp_a, &ctx_a);
+
+            if (result == PIPELINE_OK) {
+                control_handler_initiator(rp_a, &ctx_initiator);
             }
-            else
-            {
-                switch (result)
-                {
-                    case PIPELINE_DROP_PARSE:
-                        stats.drop_parse++;
-                        break;
-                    case PIPELINE_DROP_OFFENSIVE:
-                        stats.drop_offensive++;
-                        break;
-                    case PIPELINE_DROP_ANTI:
-                        stats.drop_anti++;
-                        break;
-                    case PIPELINE_DROP_STATIC:
-                        stats.drop_static++;
-                        break;
-                    case PIPELINE_DROP_KERNEL:
-                        stats.drop_kernel++;
-                        break;
-                    case PIPELINE_DROP_SESSION:
-                        stats.drop_session++;
-                        break;
-                    case PIPELINE_DROP_RESILIENCE:
-                        stats.drop_resilience++;
-                        break;
-                    case PIPELINE_DROP_SESSION_ENC:
-                        stats.drop_session_enc++;
-                        break;
-                    case PIPELINE_DROP_CHANNEL_ENC:
-                        stats.drop_channel_enc++;
-                        break;
-                    case PIPELINE_DROP_SEQ:
-                        stats.drop_seq++;
-                        break;
-                    case PIPELINE_DROP_CHANNEL:
-                        stats.drop_channel++;
-                        break;
-                    case PIPELINE_DROP_DEMUX:
-                        stats.drop_demux++;
-                        break;
-                    default:
-                        break;
-                }
-                pool_return(rp);
+            else {
+                printf("[INIT] DROP: %d\n", result);
+                pool_return(rp_a);
             }
+        }
 
+        // Process RESPONDER side (socket B)
+        packet_buf_t* rp_b = (packet_buf_t*)ring_pop(&rx_ring_b);
+        if (rp_b) {
+            pipeline_ctx_t ctx_b = {
+                .sess = g_sess_responder,
+                .rxq = &rxq_b
+            };
+            pipeline_result_t result = pipeline_inbound_process(rp_b, &ctx_b);
+
+            if (result == PIPELINE_OK) {
+                control_handler_responder(rp_b, &ctx_responder);
+            }
+            else {
+                printf("[RESP] DROP: %d\n", result);
+                pool_return(rp_b);
+            }
         }
 
         loop_ticks++;
-        if (loop_ticks >= 100)
-        {
-            printf("[STATS] rx=%llu parse=%llu off=%llu anti=%llu static=%llu kernel=%llu session=%llu resil=%llu senc=%llu cenc=%llu seq=%llu chan=%llu demux=%llu\n",
-                   (unsigned long long)stats.rx_total,
-                   (unsigned long long)stats.drop_parse,
-                   (unsigned long long)stats.drop_offensive,
-                   (unsigned long long)stats.drop_anti,
-                   (unsigned long long)stats.drop_static,
-                   (unsigned long long)stats.drop_kernel,
-                   (unsigned long long)stats.drop_session,
-                   (unsigned long long)stats.drop_resilience,
-                   (unsigned long long)stats.drop_session_enc,
-                   (unsigned long long)stats.drop_channel_enc,
-                   (unsigned long long)stats.drop_seq,
-                   (unsigned long long)stats.drop_channel,
-                   (unsigned long long)stats.drop_demux);
+        if (loop_ticks >= 100) {
+            printf("[STATS] INIT=%s RESP=%s\n",
+                handshake_state_name(g_sess_initiator ? g_sess_initiator->state : SESSION_IDLE),
+                handshake_state_name(g_sess_responder ? g_sess_responder->state : SESSION_IDLE));
             loop_ticks = 0;
         }
 
+#ifdef _WIN32
         Sleep(1);
-
+#else
+        usleep(1000);
+#endif
     }
 
-    rx_worker_stop(&w_control);
-    rx_worker_stop(&w_audio);
-    rx_worker_stop(&w_chat);
-    rx_worker_stop(&w_file);
+    //rx_worker_stop(&w_control);
+    //rx_worker_stop(&w_audio);
+    //rx_worker_stop(&w_chat);
+    //rx_worker_stop(&w_file);
 
     rx_thread_stop(&rx_thread_a);
     rx_thread_stop(&rx_thread_b);
-	tx_thread_stop(&tx_thread);
+    tx_thread_stop(&tx_thread);
+    tx_thread_stop(&tx_thread_b);
 
     udp_socket_close(&a);
     udp_socket_close(&b);

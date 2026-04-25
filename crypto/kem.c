@@ -10,7 +10,7 @@
 #endif
 
 //Plug in your ML-KEM primitive here (e.g. liboqs, pqclean, aws-lc)
-#include <oqs/kem_ml_kem.h>   // OQS_KEM_ml_kem_768_keypair / _encaps / _decaps
+#include <oqs/oqs.h>   // OQS_KEM_ml_kem_768_keypair / _encaps / _decaps
 
 
 

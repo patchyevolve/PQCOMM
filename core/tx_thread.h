@@ -2,6 +2,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#else
+#include <pthread.h>
 #endif
 
 #include "udp.h"
@@ -16,6 +18,8 @@ typedef struct
 
 #ifdef _WIN32
     HANDLE thread;
+#else
+    pthread_t thread;
 #endif
 
 } tx_thread_t;

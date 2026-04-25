@@ -12,57 +12,31 @@
 #include "seq_check.h"
 #include "channel.h"
 
-pipeline_result_t pipeline_inbound_process(packet_buf_t* rp,
-                                           packet_view_t* view,
-                                           session_t* sess,
-                                           rx_queues_t* rxq)
-{
-    if (packet_parse(rp, view) != 0)
-        return PIPELINE_DROP_PARSE;
+pipeline_result_t pipeline_inbound_process(packet_buf_t* p, pipeline_ctx_t* ctx) {
+    packet_view_t view = { 0 };
 
-    if (offensive_check(view) != 0)
-        return PIPELINE_DROP_OFFENSIVE;
+    // Layer 1: Parse
+    if (packet_parse(p, &view) != 0) return PIPELINE_DROP_PARSE;
 
-    if (anti_analysis_check(view) != 0)
-        return PIPELINE_DROP_ANTI;
+    // Layer 2-5: Security checks (no session needed)
+    if (offensive_check(&view) != 0) return PIPELINE_DROP_OFFENSIVE;
+    if (anti_analysis_check(&view) != 0) return PIPELINE_DROP_ANTI;
+    if (static_check(&view) != 0) return PIPELINE_DROP_STATIC;
+    if (kernel_filter_check(&view) != 0) return PIPELINE_DROP_KERNEL;
 
-    if (static_check(view) != 0)
-        return PIPELINE_DROP_STATIC;
+    // Layer 6: Session check (uses ctx->sess)
+    if (session_check(ctx->sess, &view) != 0) return PIPELINE_DROP_SESSION;
 
-    if (kernel_filter_check(view) != 0)
-        return PIPELINE_DROP_KERNEL;
+    // Layer 7-9: Crypto checks (uses ctx->sess)
+    if (resilience_check(&view) != 0) return PIPELINE_DROP_RESILIENCE;
+    if (session_enc_check(&view) != 0) return PIPELINE_DROP_SESSION_ENC;
+    if (channel_enc_check(&view) != 0) return PIPELINE_DROP_CHANNEL_ENC;
 
-    if (session_check(sess, view) != 0)
-        return PIPELINE_DROP_SESSION;
+    // Layer 10: Anti-replay (uses ctx->sess)
+    if (seq_check(ctx->sess, &view) != 0) return PIPELINE_DROP_SEQ;
 
-    if (resilience_check(view) != 0)
-        return PIPELINE_DROP_RESILIENCE;
-
-    /*
-     * Phase 2 insertion point:
-     * 1) session-level auth/decrypt
-     * 2) channel-level auth/decrypt
-     * 3) nonce/tag verification
-     * Keep ordering: gate -> (security) -> replay -> demux
-     */
-    if (session_enc_check(view) != 0)
-        return PIPELINE_DROP_SESSION_ENC;
-
-    if (channel_enc_check(view) != 0)
-        return PIPELINE_DROP_CHANNEL_ENC;
-
-    if (sess->state == SESSION_LOCKED &&
-        view->channel_id != CH_CONTROL &&
-        seq_check(sess, view) != 0)
-    {
-        return PIPELINE_DROP_SEQ;
-    }
-
-    if (view->channel_id < CH_CONTROL || view->channel_id > CH_ROUTE)
-        return PIPELINE_DROP_CHANNEL;
-
-    if (rx_demux_push(rxq, rp, view->channel_id) != 0)
-        return PIPELINE_DROP_DEMUX;
+    // Layer 11: Route to channel (uses ctx->rxq)
+    if (rx_demux_push(ctx->rxq, p, view.channel_id) != 0) return PIPELINE_DROP_DEMUX;
 
     return PIPELINE_OK;
 }

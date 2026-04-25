@@ -18,12 +18,36 @@ int session_check(session_t* s, packet_view_t* p)
         return -1;
     }
 
-    if (p->channel_id == CH_CONTROL && s->state != SESSION_LOCKED)
+    if (p->channel_id == CH_CONTROL)
     {
+        // RESPONDER accepts HELLO - skip address check for first handshake
+        if (s->role == ROLE_RESPONDER &&
+            s->state == SESSION_HANDSHAKE_START &&
+            p->payload[0] == CTRL_HELLO)
+        {
+            return 0;
+        }
+
+        // INITIATOR accepts non-HELLO responses - skip address check
+        if (s->role == ROLE_INITIATOR &&
+            s->state == SESSION_HANDSHAKE_START &&
+            p->payload[0] != CTRL_HELLO)
+        {
+            return 0;
+        }
+
+        // Allow control packets if already locked
+        if (s->state == SESSION_LOCKED)
+        {
+            return 0;
+        }
+
+        // For all other control packets during handshake, skip address check
+        // (address will be validated after session is established)
         return 0;
     }
 
-    if(s->state != SESSION_LOCKED)
+    if (s->state != SESSION_LOCKED)
     {
         return -1;
     }

@@ -22,7 +22,19 @@ typedef enum
     PIPELINE_DROP_DEMUX
 } pipeline_result_t;
 
-pipeline_result_t pipeline_inbound_process(packet_buf_t* rp,
-                                           packet_view_t* view,
-                                           session_t* sess,
-                                           rx_queues_t* rxq);
+// Pipeline context - holds session-specific state
+typedef struct {
+    session_t* sess;
+    rx_queues_t* rxq;
+} pipeline_ctx_t;
+
+pipeline_result_t pipeline_inbound_process(
+    packet_buf_t* p,
+    pipeline_ctx_t* ctx
+);
+
+// Process without session (for pre-session packets like HELLO)
+pipeline_result_t pipeline_inbound_process_raw(
+    packet_buf_t* p,
+    rx_queues_t* rxq
+);
