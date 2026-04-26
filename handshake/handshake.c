@@ -105,6 +105,7 @@ int handshake_init_responder(session_t* sess, uint8_t kem_type)
     sess->state = SESSION_HANDSHAKE_START;
     sess->hs.kem_type = kem_type;
     sess->hs.timeout_ms = PHASE2_HANDSHAKE_TIMEOUT_MS;
+    sess->hs.messages_exchanged = 0;
 
     memset(sess->hs.transcript_hash, 0, 32);
     memcpy(sess->hs.transcript_hash, &sess->session_id, sizeof(sess->session_id));
@@ -153,7 +154,8 @@ int handshake_build_accept(session_t* sess, packet_buf_t* out, uint32_t* seq_cou
     d[5] = 0; // flags
     memcpy(d + 6, &session_id, sizeof(session_id));
     d[14] = CH_CONTROL;
-    memcpy(d + 15, seq_counter, sizeof(uint32_t)); (*seq_counter)++;
+    uint32_t seq = (*seq_counter)++;
+    memcpy(d + 15, &seq, sizeof(seq));
     memcpy(d + 19, &payload_len, sizeof(payload_len));
     d[24] = CTRL_ACCEPT;
     memcpy(d + 25, &session_id, sizeof(session_id));
@@ -469,7 +471,6 @@ packet_buf_t* handshake_run_as_initiator(session_t* sess, packet_buf_t* in, uint
             response = pool_get();
             if (!response) return NULL;
             if (handshake_build_kem_init(sess, response, seq_counter) != 0) {
-                sess->state = SESSION_PQ_KEM_INIT_SENT;
                 pool_return(response);
                 return NULL;
             }
@@ -522,7 +523,6 @@ packet_buf_t* handshake_run_as_responder(session_t* sess, packet_buf_t* in, uint
             response = pool_get();
             if (!response) return NULL;
             if (handshake_build_kem_response(sess, response, seq_counter) != 0) {
-                sess->state = SESSION_PQ_KEM_RESPONSE_SENT;
                 pool_return(response);
                 return NULL;
             }
@@ -551,6 +551,16 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet, packet_view
     }
 
     uint8_t opcode = view->payload[0];
+
+    /* PHASE 2 REQUIREMENT: Reject PQ operations (KEM_INIT, KEM_RESPONSE) after SESSION_LOCKED */
+    if (sess->state == SESSION_LOCKED) {
+        if (opcode == CTRL_PQ_KEM_INIT || opcode == CTRL_PQ_KEM_RESPONSE) {
+            printf("[HANDSHAKE] Rejected PQ operation (opcode=%d) on locked session\n", opcode);
+            sess->hs.last_error = HS_ERR_STATE_VIOLATION;
+            g_handshake_stats.failures_state++;
+            return HS_ERROR;
+        }
+    }
 
     if (verify_state_transition(sess, opcode) != 0) {
         sess->hs.last_error = HS_ERR_STATE_VIOLATION;
@@ -607,6 +617,7 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet, packet_view
     case CTRL_SESSION_LOCKED:
         sess->state = SESSION_LOCKED;
         sess->handshake_complete = 1;
+        g_handshake_stats.successes++;  /* PHASE 2: Track successful handshake completion */
         return HS_COMPLETE;
 
     default:
