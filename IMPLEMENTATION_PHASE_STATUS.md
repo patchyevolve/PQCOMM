@@ -120,16 +120,30 @@ These are wired in pipeline order and currently return pass.
 - Major log spam is reduced, but full fast-path hardening and profiling are still pending.
 - Latency/throughput/CPU validation against final targets is not complete.
 
+### 2.3 Secure Memory
+
+- Keys are zeroed after use via `crypto_secure_wipe()`, but stack-resident keys are not guaranteed against page-out.
+- mlock/mlockall not yet used to pin key memory.
+
+### 2.4 Identity Key Management
+
+- Identity master key is hardcoded (suitable for demo only).
+- Production path needs secure key store (TPM / OS keychain / hardware-bound storage).
+
 ---
 
 ## 3) Not Yet Implemented (Major Missing Capabilities)
 
-- Real kernel filter enforcement (BPF/eBPF or equivalent platform-first gate).
-- Real anti-analysis behavior.
-- Real offensive-shell policy behavior (defensive decoy/throttle/drop strategy).
-- Resilience functions (multipath/FEC/hop/relay/reconnect policy).
-- Full CLI command surface from final spec.
-- Key lifecycle management (secure storage, rotation protocol, zeroization policy hardening).
+- Resilience functions (multipath/FEC/hop/relay/reconnect policy) — Phase 4.
+- Real kernel filter enforcement (BPF/eBPF or equivalent platform-first gate) — Phase 5.
+- Real anti-analysis behavior (pattern scoring, delay/drop/throttle) — Phase 5.
+- Real offensive-shell defensive responses (decoy, noise, rate-limit) — Phase 5.
+- Full CLI command surface from final spec — Phase 6.
+- Key lifecycle management (rotation protocol, secure storage, zeroization policy hardening) — Phase 6.
+- Audio pipeline (encode/decode thread, jitter buffer) — Phase 6.
+- Dedicated crypto thread — Phase 6.
+- Monitor/watchdog thread — Phase 6.
+- Full regression test suite (tampered tag, reused nonce, wrong channel key, replay) — Phase 7.
 
 ---
 
@@ -248,67 +262,240 @@ Goal: enforce real packet authenticity with AEAD encryption, CSPRNG session IDs,
 
 Goal: sustain communication quality under loss/jitter/path instability.
 
-### Substeps
+**Depends on Phase 3**: requires locked session as prerequisite.
 
-1. Add resilience context structure (path stats, loss window, jitter).
-2. Implement reconnect policy that preserves session identity invariants.
-3. Implement port hop control workflow.
-4. Add multipath scaffolding and selection policy.
-5. Add FEC strategy integration points.
-6. Add relay route hooks and route-channel control handling.
-7. Add adaptive bitrate feedback loop integration hooks.
-8. Test scenarios:
-   - packet loss bursts
-   - delayed reorder
-   - path failover
-   - reconnect-without-session-reset
+### Substeps (Priority Order)
+
+1. **Resilience context structure** (`core/resilience.h`):
+   - Path stats: RTT, loss rate, jitter window per remote peer
+   - Loss window: sliding window of recent sequence numbers per path
+   - Path state: active/down/degraded per transport path
+   - Thread-safe update via lock-free atomic fields
+
+2. **FEC strategy**:
+   - Define FEC policy: Reed-Solomon or XOR-based (e.g., interleaved parity per N packets)
+   - FEC encode step in outbound pipeline (before scheduler, after encryption)
+   - FEC decode step in inbound pipeline (after resilience layer, before session gate)
+   - Configurable FEC rate (1:N) based on observed loss
+   - No FEC allocation in fast path (pre-allocated FEC buffer per path)
+
+3. **Multipath transport**:
+   - Multiple UDP socket pairs (primary + backup)
+   - Path selection policy: lowest-loss, lowest-RTT, or round-robin
+   - Per-path sequence space (independent seq counters per path)
+   - Path health monitoring via periodic probe packets (CONTROL channel opcodes)
+   - Transparent to session layer — session_id unchanged (RULE-15)
+
+4. **Port hop**:
+   - CONTROL channel opcode for port-change command
+   - New socket bind on alternate port, old socket drained
+   - Graceful transition: both ports live during handover window
+   - Configurable hop interval or on-demand via CLI
+
+5. **Reconnect policy**:
+   - Detect transport loss via heartbeat timeout (separate from handshake timeout)
+   - Re-establish UDP connectivity without session reset
+   - Preserve session_id, keys, replay window across reconnect
+   - Max reconnect attempts before session drop
+
+6. **Relay / mesh routing**:
+   - ROUTE channel (channel 5) for relay control messages
+   - Relay node discovery and trust establishment
+   - Encrypted relay forwarding (same session keys, different transport)
+   - Route selection based on path quality metrics
+
+7. **Adaptive bitrate**:
+   - Feedback loop: observe loss rate → adjust FEC ratio or audio quality
+   - Integration hooks in audio pipeline (placeholder for Phase 6)
+   - Minimum quality floor to prevent infinite degradation
+
+8. **Test scenarios**:
+   - Packet loss bursts (0%, 5%, 15%, 30% loss rates)
+   - Delayed reorder (±10ms, ±50ms, ±100ms jitter)
+   - Path failover (primary socket kill, verify session survives)
+   - Reconnect without session reset (kill + restore transport)
+   - Port hop during active data flow (no dropped packets)
+   - FEC decode under configurable loss rates
 
 ---
 
-## Phase 5 - Outer Defense Layers (Kernel, Anti, Offensive Policy)
+## Phase 5 - Outer Defense Layers (Kernel, Anti, Offensive)
 
 Goal: implement proactive defensive filtering and deception policy.
 
-### Substeps
+**Depends on Phase 4**: resilience context useful for distinguishing attack from noise.
 
-1. Implement kernel-first filter policy model:
-   - source/port constraints
-   - packet size and protocol prechecks
-   - platform fallback behavior
-2. Implement anti-analysis policy:
-   - suspicious pattern scoring
-   - delay/drop/throttle decisions
-3. Implement offensive-shell defensive responses:
-   - decoy responses
-   - safe noise/cover tactics
-   - rate-limited response strategy
-4. Ensure trusted traffic bypass rules are respected.
-5. Add observability per layer:
-   - scored events
-   - decision counters
-   - rate-limit hits
-6. Add safety bounds:
-   - no unbounded response generation
-   - no impact on trusted flow latency
-7. Validate with scan/flood simulation tests.
+### Substeps (Priority Order)
+
+1. **Kernel filter first gate** (`layers/kernel_filter.c`):
+   - BPF/eBPF program for Linux; platform fallback for non-Linux (user-space filter)
+   - Source IP whitelist/blocklist (configurable via CLI)
+   - Port binding verification (only bound port allowed)
+   - Packet size bounds check (drop oversized or undersized)
+   - Protocol check (UDP only)
+   - Constant-time checks (no branching on secret data)
+   - Must run before any user-space processing (RULE-13)
+
+2. **Anti-analysis policy** (`layers/anti_analysis.c`):
+   - Suspicious pattern scoring:
+     - Rate of packets from unknown sources
+     - Malformed header frequency (bad magic, version, flags)
+     - Probe detection (sequential port scan, protocol scan)
+   - Actions per score threshold:
+     - `low`: log + pass through
+     - `medium`: delay (artificial jitter), throttle (rate-limit)
+     - `high`: drop silently, send decoy responses
+   - Must not modify trusted packets (matched session_id + channel)
+   - Per-source scoring state with LRU eviction to limit memory
+
+3. **Offensive shell** (`layers/offensive.c`):
+   - Decoy handshake: respond to KEM_INIT from unknown source with fake ACCEPT
+   - Padding: inflate response sizes to obfuscate payload length
+   - Noise: inject random UDP datagrams to cover traffic patterns
+   - Rate-limited response strategy:
+     - Exponential backoff per source IP
+     - Total bandwidth cap on decoy traffic
+   - Must not touch session data (RULE-4 for trusted packets)
+
+4. **Safety bounds**:
+   - Decoy generation must not exhaust packet pool (reserved pool for trusted traffic)
+   - Rate-limit counters must not overflow (saturated counter = max rate)
+   - No unbounded memory growth from per-source state
+   - All decoy/noise traffic in `fake` scheduler queue (lowest priority)
+
+5. **Observability per layer**:
+   - Drop counters per category (kernel, anti-analysis, offensive)
+   - Rate-limit hit counters per source IP
+   - Scored event histogram (low/medium/high decisions)
+   - Periodic stats line includes per-layer drop counts
+
+6. **Test scenarios**:
+   - Port scan detection (sequential port probes)
+   - Protocol scan detection (varying magic/version)
+   - Flood from unknown source (verify trusted traffic not affected)
+   - Rate-limit exhaustion (verify bounded behavior)
+   - Decoy handshake verification (fake ACCEPT returned, real session unchanged)
 
 ---
 
-## Phase 6 - Operational Hardening and Compliance Closure
+## Phase 6 - CLI, Key Management, and Operational Features
 
-Goal: production-grade behavior and final architecture compliance checks.
+Goal: production-grade user interface, key hygiene, and operational infrastructure.
+
+**Depends on Phase 5**: outer defense layers protect CLI from network abuse.
+
+### Substeps (Priority Order)
+
+1. **CLI command surface** (`cli/` directory):
+   - Thread-safe CLI via stdin or Unix domain socket
+   - Parser for commands: `connect`, `disconnect`, `status`, `chat`, `sendfile`,
+     `bitrate`, `cover`, `rekey`, `hop`, `relay`, `quit`
+   - Tab-completion for interactive mode
+   - RULE-18 enforced: CLI never opens UDP sockets
+   - Status output: session state, channel states, peer info, key epoch, per-layer stats
+   - Chat command: reads text from stdin, builds CH_CHAT packet, enqueues for send
+   - `quiet` flag for scripted operation (JSON output or minimal output)
+
+2. **Key rotation protocol**:
+   - New CONTROL opcode: `CTRL_REKEY_INIT`, `CTRL_REKEY_CONFIRM`
+   - Initiator generates new KEM keypair → sends KEM_INIT on CONTROL channel
+   - Responder encapsulates new shared secret → sends KEM_RESPONSE
+   - Both derive new key epoch without session interruption
+   - Old key zeroed only after both sides confirm `CTRL_REKEY_CONFIRM`
+   - Key epoch counter in `session_keys_t.key_epoch` (monotonic)
+   - Rekey while active data flowing: audio/chat packets continue on old keys until confirm
+
+3. **Secure key storage**:
+   - Replace hardcoded `g_identity_master_key` with platform secure store:
+     - Linux: `secrets://` via secret-tool / kernel keyring
+     - Windows: DPAPI `CryptProtectData`
+   - Session keys locked in memory via `mlock()` / `VirtualLock()` (RULE-14)
+   - Key material never written to disk (no core dump exposure via `MADV_DONTDUMP`)
+   - RULE-14: keys never leave secure storage (no export function)
+
+4. **Audio pipeline**:
+   - Audio thread with dedicated ring buffer (lock-free)
+   - Audio encode/decode: Opus or equivalent low-latency codec
+   - Audio frames: 20ms packets, CH_AUDIO channel
+   - RULE-6: audio must never wait for file
+   - RULE-10: no mutex in audio path
+   - Jitter buffer: adaptive, max 100ms, packet-concealment for lost frames
+   - Timing via `timerfd` (Linux) or `waitable timers` (Windows)
+
+5. **Dedicated crypto thread**:
+   - Move `session_enc_check` / `session_enc_apply` out of main event loop
+   - Crypto thread pulls from crypto work queue (lock-free ring)
+   - CPU affinity pinning for crypto thread (isolate from I/O threads)
+   - Batch decryption if multiple packets queued (potential throughput gain)
+
+6. **Monitor / watchdog thread**:
+   - Periodic health checks: packet rate, loss rate, queue depths, pool pressure
+   - Watchdog: detect thread stalls (rx/tx/crypto/control not progressing)
+   - Metrics export via CLI `status` command
+   - Alert callback on threshold breach (configurable: log / CLI notification)
+
+7. **Config system**:
+   - Config file: TOML or JSON (e.g., `~/.config/ssm/transport.toml`)
+   - Runtime overrides via CLI
+   - Config schema: peer addresses, ports, KEM type, timeouts, FEC rate, cover traffic
+   - Sensible defaults for all parameters
+
+---
+
+## Phase 7 - Compliance Closure and Test Suite
+
+Goal: final architecture compliance checks and production readiness validation.
+
+**Depends on Phases 4-6**: all features implemented before final audit.
 
 ### Substeps
 
-1. Remove remaining non-essential hot-path logging.
-2. Validate no forbidden operations in fast path.
-3. Add config hardening defaults.
-4. Add structured status reporting for all layers.
-5. Create pass/fail checklist mapped to locked architecture rules.
-6. Run end-to-end regression suite:
-   - handshake
-   - lock transition
-   - protected channel traffic
-   - replay defense
-   - resilience behavior
-7. Freeze interfaces and document stable extension points.
+1. **Remove remaining hot-path logging**:
+   - Audit all `printf` calls in pipeline layers
+   - Hot path = every packet, every tick — only allowed in `print_stats()` periodic line
+   - Handshake path allowed (only runs once per session)
+   - Error path allowed (runs only on failure)
+   - Compile-time flag for development verbosity
+
+2. **Fast-path audit against rules**:
+   - RULE-8: verify zero `malloc`/`calloc`/`realloc` in packet path (pool_get/pool_return only)
+   - RULE-9: verify zero logging in packet path
+   - RULE-10: verify zero mutex in audio path
+   - RULE-11: verify `packet_parse` called exactly once per packet
+   - Static analysis: grep for forbidden patterns
+
+3. **Locked memory and secrets audit**:
+   - Verify `crypto_secure_wipe()` called after every key derivation
+   - Verify no key material in logs, core dumps, or swap
+   - Verify stack arrays containing keys are volatile-wiped
+   - Verify no key material in heap (RULE-14)
+
+4. **Config hardening defaults**:
+   - Minimum key sizes enforced
+   - Session timeout: default 5000ms, max 30000ms
+   - Replay window: minimum 64 entries
+   - FEC: disabled by default (opt-in)
+   - Cover traffic: disabled by default
+
+5. **Structured status reporting**:
+   - Per-layer pass/fail/disabled status
+   - Rule compliance matrix (all 18 rules)
+   - Version string including protocol version + phases implemented
+
+6. **End-to-end regression suite**:
+   - Handshake success (both roles, 100 iterations)
+   - Bad identity: wrong master key → identity verification failure
+   - Replayed handshake message: capture and replay HELLO → rejected
+   - Wrong state transition: send KEM_INIT before HELLO → `HS_ERR_STATE_VIOLATION`
+   - Tampered AEAD tag: flip one byte → decryption failure, packet dropped
+   - Reused nonce: same session_id + channel + seq → replay rejection
+   - Wrong channel key: modify channel_id in header → AEAD tag mismatch
+   - Locked session PQ rejection: KEM_INIT after LOCKED → `failures_state++`
+   - Pool exhaustion: flood with allocated buffers → graceful degradation
+   - Packet loss resilience: drop 10% of packets → FEC recovery
+
+7. **Freeze interfaces**:
+   - Public API headers documented with input/output/error contracts
+   - Layer return codes frozen (documented in `pipeline.h`)
+   - Opcode assignments frozen (documented in `session.h`)
+   - Header format frozen (documented in `PHASE1_WIRE_CONTRACT.md`)

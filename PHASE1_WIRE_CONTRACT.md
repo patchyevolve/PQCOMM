@@ -110,11 +110,28 @@ The `tag` follows immediately after the ciphertext at offset `24 + length - AEAD
 - Periodic stats line is allowed.
 - Selftest code is compile-time gated (`PHASE1_SELFTEST`).
 
-## Out of Scope for Phase 1 (Addressed in Later Phases)
+## Addressed in Later Phases
 
-- Anti-analysis layer
-- Offensive shell
-- Kernel filter (BPF/eBPF)
-- Resilience features (multipath/FEC/hop/relay)
-- Key rotation protocol
-- CLI command surface
+| Feature | Phase | Doc Reference |
+|---|---|---|
+| Resilience (multipath/FEC/hop/relay) | Phase 4 | Spec §16 |
+| Kernel filter (BPF/eBPF) | Phase 5 | Spec §6 |
+| Anti-analysis layer | Phase 5 | Spec §9 |
+| Offensive shell | Phase 5 | Spec §10 |
+| CLI command surface | Phase 6 | Spec §20 |
+| Key rotation protocol | Phase 6 | Spec §17 |
+| Audio pipeline + crypto thread | Phase 6 | Spec §15 |
+| Secure key storage (locked memory) | Phase 6 | Spec §17 |
+| Full regression test suite | Phase 7 | Spec §21 |
+
+## Phase Cross-Reference
+
+| Phase | Delivered |
+|---|---|
+| Phase 1 | Core transport, packet parsing, static shell, session gate, replay, scheduler, pipeline |
+| Phase 2 | PQ handshake (ML-KEM 768), state machine, transcript hash, HKDF derivation, handshake stats |
+| Phase 3 | ChaCha20-Poly1305 AEAD, CSPRNG session IDs, HMAC identity verification, channel key AAD binding |
+| Phase 4 | Resilience — FEC, multipath, reconnect, port hop, adaptive bitrate |
+| Phase 5 | Outer defense — kernel BPF, anti-analysis, offensive shell |
+| Phase 6 | CLI, key rotation, audio pipeline, secure storage, operational features |
+| Phase 7 | Compliance closure — remove hot-path logs, fast-path audit, regression suite, freeze interfaces |
