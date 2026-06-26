@@ -5,12 +5,7 @@
 #include "atomic.h"
 #include "config.h"
 
-/*
-Single Producer Single Consumer ring buffer
-Lock-free
-No malloc
-Power-of-2 size required
-*/
+/* spsc ring - no locks, no allocs, power-of-2 only */
 
 typedef struct 
 {
@@ -37,9 +32,8 @@ int ring_push(spsc_ring_t* r, void* item)
 
     uint32_t rd = atomic_load_int(&r->read_idx);
 
-    if (next == rd){
-        return -1; // cause its full
-    }
+    if (next == rd)
+        return -1;
 
     r->slots[w] = item;
 
@@ -55,9 +49,8 @@ void* ring_pop(spsc_ring_t* r)
 
     uint32_t w = atomic_load_int( &r->write_idx );
 
-    if (rd == w){
-        return NULL; //cause its empty
-    }
+    if (rd == w)
+        return NULL;
 
     void* item = r->slots[rd];
 

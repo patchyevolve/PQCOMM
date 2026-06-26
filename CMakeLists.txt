@@ -34,6 +34,7 @@ set(SRC
     core/rx_worker.c
     crypto/kem.c
     crypto/hkdf.c
+    crypto/aead.c
     handshake/handshake.c
 )
 

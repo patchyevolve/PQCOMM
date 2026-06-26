@@ -4,23 +4,25 @@
 #define PACKET_POOL_SIZE    4096
 #define RING_SIZE           1024
 
-//phase toggles
 #define PHASE1_SELFTEST     0
-
-// Phase 2 Configuration
-#define PHASE2_SECURITY_ENABLED     1   // Set to 1 when ready
-#define PHASE2_KEM_ALGORITHM        KEM_TYPE_MLKEM_768
+#define PHASE2_SECURITY_ENABLED     1
+#define PHASE2_KEM_ALGORITHM        1
 #define PHASE2_HANDSHAKE_TIMEOUT_MS 30000
-#define PHASE2_MAX_HANDSHAKE_ATTEMPTS 3
 
-// Security constants
 #define SESSION_KEY_SIZE        32
 #define CHANNEL_KEY_SIZE        32
-#define IDENTITY_KEY_SIZE       32
 #define TRANSCRIPT_HASH_SIZE    32
 
-// Handshake payload sizes
-#define HS_PAYLOAD_HELLO_SIZE           32
-#define HS_PAYLOAD_KEM_INIT_SIZE        (KEM_MLKEM_768_PK_SIZE + 16)
-#define HS_PAYLOAD_KEM_RESPONSE_SIZE    (KEM_MLKEM_768_CT_SIZE + 16)
-#define HS_PAYLOAD_IDENTITY_SIZE        96
+#define AEAD_NONCE_SIZE         12
+#define AEAD_TAG_SIZE           16
+#define HEADER_SIZE             24
+
+#define PACKET_FLAG_ENCRYPTED   0x01
+
+// limits for phase 4-5
+#define OFFENSIVE_MAX_SOURCES   256
+#define OFFENSIVE_WINDOW_MS     1000
+#define OFFENSIVE_THRESHOLD     100
+
+#define RESILIENCE_MAX_PATHS    4
+#define RESILIENCE_FEC_GROUP    4

@@ -9,12 +9,8 @@
   #include <sys/random.h>
 #endif
 
-//Plug in your ML-KEM primitive here (e.g. liboqs, pqclean, aws-lc)
-#include <oqs/oqs.h>   // OQS_KEM_ml_kem_768_keypair / _encaps / _decaps
+#include <oqs/oqs.h>
 
-
-
-// Internal RNG (not exposed in kem.h)
 static int crypto_random_bytes(uint8_t *buf, uint32_t len)
 {
 #ifdef _WIN32
@@ -32,17 +28,11 @@ static int crypto_random_bytes(uint8_t *buf, uint32_t len)
 }
 
 
-//Public utilities 
-
-// Declared in kem.h as kem_random_bytes 
 void kem_random_bytes(uint8_t *buf, uint32_t len)
 {
-    // Best-effort; callers that need error handling should use the internal
-    // crypto_random_bytes() directly and check the return value.
     crypto_random_bytes(buf, len);
 }
 
-// the compiler from optimising the loop away in the wipe function below.
 int crypto_secure_memcmp(const void *a, const void *b, size_t len)
 {
     const volatile uint8_t *pa = (const volatile uint8_t *)a;
@@ -50,10 +40,9 @@ int crypto_secure_memcmp(const void *a, const void *b, size_t len)
     uint8_t diff = 0;
     for (size_t i = 0; i < len; i++)
         diff |= pa[i] ^ pb[i];
-    return diff; /* 0 == equal */
+    return diff;
 }
 
-// header declares crypto_secure_wipe
 void crypto_secure_wipe(void *ptr, size_t len)
 {
     volatile uint8_t *p = (volatile uint8_t *)ptr;
@@ -61,8 +50,6 @@ void crypto_secure_wipe(void *ptr, size_t len)
         p[i] = 0;
 }
 
-
-// Size table 
 void kem_get_sizes(uint8_t kem_type,
                    uint32_t *pk_size, uint32_t *sk_size,
                    uint32_t *ct_size, uint32_t *ss_size)
@@ -83,7 +70,7 @@ void kem_get_sizes(uint8_t kem_type,
             ss = KEM_MLKEM_1024_SS_SIZE;
             break;
         default:
-            break; /* all zeros */
+            break;
     }
 
     if (pk_size) *pk_size = pk;
@@ -92,8 +79,6 @@ void kem_get_sizes(uint8_t kem_type,
     if (ss_size) *ss_size = ss;
 }
 
-
-//Lifecycle 
 
 int kem_init(kem_context_t *ctx, uint8_t kem_type)
 {
@@ -113,8 +98,6 @@ void kem_cleanup(kem_context_t *ctx)
     crypto_secure_wipe(ctx, sizeof(kem_context_t));
 }
 
-
-// Core KEM operations 
 
 int kem_keypair(kem_context_t *ctx,
                 uint8_t *public_key,  uint32_t *pk_size,
@@ -157,7 +140,7 @@ int kem_encapsulate(const uint8_t *public_key,  uint32_t pk_size,
 {
     if (!public_key || !ciphertext || !shared_secret) return -1;
 
-    /* Determine algo type from the public-key size */
+    /* infer algo from key size */
     uint8_t kem_type;
     if      (pk_size == KEM_MLKEM_768_PK_SIZE)  kem_type = KEM_TYPE_MLKEM_768;
     else if (pk_size == KEM_MLKEM_1024_PK_SIZE) kem_type = KEM_TYPE_MLKEM_1024;
@@ -191,7 +174,7 @@ int kem_decapsulate(const uint8_t *secret_key,   uint32_t sk_size,
 {
     if (!secret_key || !ciphertext || !shared_secret) return -1;
 
-    /* Determine algo type from the secret-key size */
+    /* infer algo from key size */
     uint8_t kem_type;
     if      (sk_size == KEM_MLKEM_768_SK_SIZE)  kem_type = KEM_TYPE_MLKEM_768;
     else if (sk_size == KEM_MLKEM_1024_SK_SIZE) kem_type = KEM_TYPE_MLKEM_1024;

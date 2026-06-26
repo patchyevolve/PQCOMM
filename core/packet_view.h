@@ -1,25 +1,21 @@
 #pragma once
-
 #include <stdint.h>
 #include "packet.h"
+#include "config.h"
 
-typedef struct 
-{
-    //raw ref
+typedef struct {
     packet_buf_t* buf;
-
-    //parsed header fields
     uint32_t magic;
     uint8_t version;
     uint8_t flags;
-
     uint64_t session_id;
     uint8_t channel_id;
-
     uint32_t seq;
     uint32_t length;
-
-    //pointers
     uint8_t* payload;
 
+    /* phase 3: aead fields stripped during parse */
+    uint8_t nonce[AEAD_NONCE_SIZE];
+    uint8_t tag[AEAD_TAG_SIZE];
+    uint8_t encrypted;
 } packet_view_t;

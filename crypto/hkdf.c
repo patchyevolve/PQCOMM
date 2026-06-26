@@ -1,27 +1,19 @@
 #include "hkdf.h"
 #include <string.h>
 #include <stddef.h>
-
-/* Replaceable backend */
 #include <mbedtls/md.h>
 
-
-/* HMAC-SHA256 (backend wrapper) */
-static int crypto_hmac_sha256(const uint8_t *key,  uint32_t key_len,
+static int crypto_hmac_sha256(const uint8_t *key, uint32_t key_len,
                               const uint8_t *data, uint32_t data_len,
                               uint8_t out[HKDF_HASH_SIZE])
 {
     const mbedtls_md_info_t *info =
         mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     if (!info) return -1;
-
-    return (mbedtls_md_hmac(info,
-                            key, key_len,
-                            data, data_len,
-                            out) == 0) ? 0 : -1;
+    return (mbedtls_md_hmac(info, key, key_len, data, data_len, out) == 0) ? 0 : -1;
 }
 
-/* streaming HMAC (no large buffer) */
+/* streaming hmac so we dont need to concat into a temp buffer */
 static int crypto_hmac_sha256_stream(const uint8_t *key, uint32_t key_len,
                                      const uint8_t *a, uint32_t a_len,
                                      const uint8_t *b, uint32_t b_len,
@@ -34,9 +26,7 @@ static int crypto_hmac_sha256_stream(const uint8_t *key, uint32_t key_len,
 
     mbedtls_md_context_t ctx;
     mbedtls_md_init(&ctx);
-
-    if (mbedtls_md_setup(&ctx, info, 1) != 0)
-        return -1;
+    if (mbedtls_md_setup(&ctx, info, 1) != 0) return -1;
 
     if (mbedtls_md_hmac_starts(&ctx, key, key_len) != 0) goto fail;
     if (a && a_len && mbedtls_md_hmac_update(&ctx, a, a_len) != 0) goto fail;
@@ -46,42 +36,36 @@ static int crypto_hmac_sha256_stream(const uint8_t *key, uint32_t key_len,
 
     mbedtls_md_free(&ctx);
     return 0;
-
 fail:
     mbedtls_md_free(&ctx);
     return -1;
 }
 
-/* Secure wipe */
 static void secure_wipe(void *ptr, size_t len)
 {
     volatile uint8_t *p = (volatile uint8_t *)ptr;
     while (len--) *p++ = 0;
 }
 
-/* HKDF-Extract */
+/* hkdf-extract: prk = hmac(salt, ikm) */
 int hkdf_extract(const uint8_t *salt, uint32_t salt_len,
-                 const uint8_t *ikm,  uint32_t ikm_len,
+                 const uint8_t *ikm, uint32_t ikm_len,
                  uint8_t *prk_output)
 {
     if (!ikm || !prk_output) return -1;
 
     static const uint8_t zero_salt[HKDF_HASH_SIZE] = {0};
-
     if (!salt || salt_len == 0) {
         salt = zero_salt;
         salt_len = HKDF_HASH_SIZE;
     }
-
-    return crypto_hmac_sha256(salt, salt_len,
-                              ikm,  ikm_len,
-                              prk_output);
+    return crypto_hmac_sha256(salt, salt_len, ikm, ikm_len, prk_output);
 }
 
-/* HKDF-Expand (streaming, no fixed buffer) */
-int hkdf_expand(const uint8_t *prk,  uint32_t prk_len,
+/* hkdf-expand, streaming so no big T buffer needed */
+int hkdf_expand(const uint8_t *prk, uint32_t prk_len,
                 const uint8_t *info, uint32_t info_len,
-                uint8_t *okm,        uint32_t okm_len)
+                uint8_t *okm, uint32_t okm_len)
 {
     if (!prk || !okm) return -1;
     if (prk_len < HKDF_HASH_SIZE) return -1;
@@ -100,55 +84,40 @@ int hkdf_expand(const uint8_t *prk,  uint32_t prk_len,
             secure_wipe(T, sizeof T);
             return -1;
         }
-
         if (crypto_hmac_sha256_stream(
                 prk, prk_len,
                 (T_len ? T : NULL), T_len,
                 info, info_len,
-                &counter, 1,
-                T) != 0)
+                &counter, 1, T) != 0)
         {
             secure_wipe(T, sizeof T);
             memset(okm, 0, okm_len);
             return -1;
         }
-
         uint32_t copy = okm_len - offset;
         if (copy > HKDF_HASH_SIZE) copy = HKDF_HASH_SIZE;
-
         memcpy(okm + offset, T, copy);
-
         offset += copy;
         T_len = HKDF_HASH_SIZE;
         counter++;
     }
-
     secure_wipe(T, sizeof T);
     return 0;
 }
 
-/* Full HKDF */
-int hkdf(const uint8_t *salt,  uint32_t salt_len,
-         const uint8_t *ikm,   uint32_t ikm_len,
-         const uint8_t *info,  uint32_t info_len,
-         uint8_t *okm,         uint32_t okm_len)
+int hkdf(const uint8_t *salt, uint32_t salt_len,
+         const uint8_t *ikm, uint32_t ikm_len,
+         const uint8_t *info, uint32_t info_len,
+         uint8_t *okm, uint32_t okm_len)
 {
     uint8_t prk[HKDF_HASH_SIZE];
-
-    if (hkdf_extract(salt, salt_len,
-                     ikm,  ikm_len,
-                     prk) != 0)
+    if (hkdf_extract(salt, salt_len, ikm, ikm_len, prk) != 0)
         return -1;
-
-    int ret = hkdf_expand(prk, HKDF_HASH_SIZE,
-                          info, info_len,
-                          okm,  okm_len);
-
+    int ret = hkdf_expand(prk, HKDF_HASH_SIZE, info, info_len, okm, okm_len);
     secure_wipe(prk, sizeof prk);
     return ret;
 }
 
-/* Labels (domain-separated) */
 static const uint8_t LABEL_SESSION[]  = "SCv1 session key";
 static const uint8_t LABEL_CHANNEL0[] = "SCv1 channel key 0";
 static const uint8_t LABEL_CHANNEL1[] = "SCv1 channel key 1";
@@ -156,23 +125,21 @@ static const uint8_t LABEL_CHANNEL2[] = "SCv1 channel key 2";
 static const uint8_t LABEL_CHANNEL3[] = "SCv1 channel key 3";
 static const uint8_t LABEL_CHANNEL4[] = "SCv1 channel key 4";
 
-/* derive_session_keys */
-int derive_session_keys(const uint8_t *kem_secret,      uint32_t secret_len,
+/* derives one session key + 5 channel keys from kem shared secret + transcript */
+int derive_session_keys(const uint8_t *kem_secret, uint32_t secret_len,
                         const uint8_t *transcript_hash, uint32_t hash_len,
-                        uint8_t *session_key,           uint32_t sk_len,
+                        uint8_t *session_key, uint32_t sk_len,
                         uint8_t channel_keys[5][32])
 {
     if (!kem_secret || !transcript_hash || !session_key || !channel_keys)
         return -1;
-
     if (secret_len == 0 || hash_len == 0 || sk_len == 0)
         return -1;
 
     uint8_t prk[HKDF_HASH_SIZE];
 
     if (hkdf_extract(transcript_hash, hash_len,
-                     kem_secret, secret_len,
-                     prk) != 0)
+                     kem_secret, secret_len, prk) != 0)
         return -1;
 
     if (hkdf_expand(prk, HKDF_HASH_SIZE,

@@ -32,9 +32,3 @@ pipeline_result_t pipeline_inbound_process(
     packet_buf_t* p,
     pipeline_ctx_t* ctx
 );
-
-// Process without session (for pre-session packets like HELLO)
-pipeline_result_t pipeline_inbound_process_raw(
-    packet_buf_t* p,
-    rx_queues_t* rxq
-);
