@@ -8,8 +8,12 @@
 | **Scope** | Real-time secure duplex communication system |
 | **Transport** | UDP multi-path |
 | **Modes** | Audio · Chat · File · Control |
-| **Security** | Post-Quantum handshake + symmetric session |
+| **Security** | Post-Quantum handshake + symmetric session AEAD |
 | **Architecture** | Multi-layer locked tunnel with outer defense shells |
+| **Phase** | Phase 3 complete — PQ handshake, AEAD encryption, identity verification |
+| **KEM** | ML-KEM 768 (liboqs) |
+| **Session cipher** | ChaCha20-Poly1305 (mbedtls) |
+| **Identity** | HMAC-SHA256 with pre-shared master key |
 
 > **This document defines the final architecture. After this document, structural changes are not allowed.**
 
@@ -39,7 +43,7 @@
 - [19. Security Guarantees](#19-security-guarantees)
 - [20. CLI + Chat](#20-cli--chat)
 - [21. Implementation Constraints](#21-implementation-constraints)
-- [22. Final Status](#22-final-status)
+- [22. Implementation Status](#22-implementation-status)
 
 ---
 
@@ -53,15 +57,15 @@
 | **Audio** | Low latency audio transmission |
 | **Data** | Secure chat and file transfer |
 | **Session** | Exclusive session tunnel |
-| **Identity** | Strong identity verification |
-| **Cryptography** | Post-quantum safe handshake |
+| **Identity** | Strong identity verification via HMAC-SHA256 |
+| **Cryptography** | Post-quantum safe handshake (ML-KEM 768) + AEAD session (ChaCha20-Poly1305) |
 | **Performance** | Low CPU usage in trusted mode |
 | **Defense** | Resistance to spoof, flood, replay |
 | **Resilience** | Survive packet loss / delay |
 | **Adaptability** | Adapt under jamming |
 | **Kernel** | Kernel-level filtering support |
 | **Hardware** | Hardware crypto acceleration support |
-| **Keys** | Secure key storage + automatic key rotation |
+| **Keys** | Secure key storage + HKDF-based key derivation |
 | **Transport** | Multi-path transport |
 | **Mesh** | Relay / mesh support |
 | **Control** | CLI control interface |
@@ -122,8 +126,8 @@ Fast path must be constant time
 
 ### Attacker CANNOT
 
-- Break AEAD crypto
-- Break PQ KEM
+- Break AEAD crypto (ChaCha20-Poly1305)
+- Break PQ KEM (ML-KEM 768)
 - Read secure memory
 - Bypass kernel filter locally
 
@@ -212,6 +216,14 @@ LOCKED      → CLOSED
 [LOCKED] → [CLOSED]
 ```
 
+### Handshake Sub-States (Session-Level)
+
+These are the internal session states used during the PQ handshake (mapped to system-level `HANDSHAKE` / `VERIFY`):
+
+```
+IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT → IDENTITY_PROOF_SENT → LOCKED
+```
+
 ---
 
 ## 5. Layer Architecture
@@ -224,7 +236,7 @@ LOCKED      → CLOSED
 ├─────────────────────────────┤
 │  ANTI-ANALYSIS LAYER        │  ← Hides metadata, detects probing
 ├─────────────────────────────┤
-│  STATIC SHELL               │  ← Magic, version, header checks
+│  STATIC SHELL               │  ← Magic, version, header, flags
 ├─────────────────────────────┤
 │  KERNEL FILTER              │  ← First drop gate (BPF/eBPF)
 ├─────────────────────────────┤
@@ -234,9 +246,9 @@ LOCKED      → CLOSED
 ├─────────────────────────────┤
 │  CONTROL                    │  ← Session control processing
 ├─────────────────────────────┤
-│  SESSION ENC                │  ← Session-level decryption
+│  SESSION ENC                │  ← Session-level AEAD decrypt
 ├─────────────────────────────┤
-│  CHANNEL ENC                │  ← Per-channel decryption
+│  CHANNEL ENC                │  ← Per-channel key binding
 ├─────────────────────────────┤
 │  CHANNEL                    │  ← Channel demux/dispatch
 ├─────────────────────────────┤
@@ -244,7 +256,29 @@ LOCKED      → CLOSED
 └─────────────────────────────┘
 ```
 
-Each layer defines: **input**, **output**, **allowed actions**, **forbidden actions**.
+### Pipeline Order (Inbound Implementation)
+
+As implemented in `pipeline/pipeline_inbound.c`:
+
+1. `offensive_check` — stub (returns pass)
+2. `anti_analysis_check` — stub (returns pass)
+3. `static_check` — validates magic, version, flags, length, channel_id, seq
+4. `kernel_filter_check` — stub (returns pass)
+5. `session_check` — validates session_id, peer IP/port against active session
+6. `seq_check` — replay window and monotonic sequence
+7. `resilience_check` — stub (returns pass)
+8. `session_enc_check` — decrypts ChaCha20-Poly1305, verifies tag, channel key AAD binding
+9. `channel_enc_check` — stub (returns pass; channel binding in session_enc)
+10. `channel_demux` — routes to channel handler (CONTROL → control_handler)
+
+### Outbound Order
+
+1. Application builds plaintext payload
+2. `channel_demux` — assigns channel
+3. `channel_enc_apply` — stub (returns pass)
+4. `session_enc_apply` — encrypts ChaCha20-Poly1305, prepends nonce, appends tag
+5. Scheduler selects next packet from priority queues
+6. UDP send
 
 ---
 
@@ -262,6 +296,7 @@ Each layer defines: **input**, **output**, **allowed actions**, **forbidden acti
 - Must be **constant time**
 - Must **not decrypt**
 - Implemented via BPF / eBPF or equivalent
+- Current implementation: stub in `layers/kernel_filter_stub.c` (returns pass)
 
 ---
 
@@ -269,14 +304,22 @@ Each layer defines: **input**, **output**, **allowed actions**, **forbidden acti
 
 **Purpose:** Fast structural validation, no crypto.
 
-| Check | Description |
-|---|---|
-| `magic` | Protocol magic bytes |
-| `version` | Supported version range |
-| `header size` | Expected fixed size |
-| `flags` | Valid flag combinations |
-| `length` | Declared vs. actual size |
-| `checksum` | Header integrity |
+| Check | Description | Current impl |
+|---|---|---|
+| `magic` | Protocol magic bytes must equal `0xAABBCCDD` | `layers/static_shell.c` |
+| `version` | Must equal `1` | `layers/static_shell.c` |
+| `header size` | Must be exactly 24 bytes | Implicit in parser |
+| `flags` | Must be `0x00` (plain) or `0x01` (encrypted) | `layers/static_shell.c` |
+| `length` | Declared length must match packet size minus header | `layers/packet_parse.c` |
+| `channel_id` | Must be in range 1–5 | `layers/static_shell.c` |
+| `seq` | Must not be zero | `layers/static_shell.c` |
+
+### Flag Bits
+
+| Bit | Mask | Meaning |
+|---|---|---|
+| 0 | `0x01` | `PACKET_FLAG_ENCRYPTED` — payload is AEAD-encrypted, nonce+tag follow header |
+| 1–7 | `0xFE` | Reserved, must be zero |
 
 - **No crypto**
 - **No allocation**
@@ -294,8 +337,14 @@ Each layer defines: **input**, **output**, **allowed actions**, **forbidden acti
 | `peer_port` | Expected remote port |
 | `format` | Packet structure valid |
 
+**Additional rules:**
+- Pre-lock: only CONTROL channel packets are accepted
+- Locked: CONTROL channel packets pass unconditionally (no session_enc applied, RULE-2)
+- After lock: `session_id` must match; if mismatch, packet is dropped with no response
 - Fail → **drop immediately** (no error response)
 - Must be **O(1)** lookup
+
+Current implementation: `layers/session_gate.c` — uses flat session table, O(1) lookup by session_id.
 
 ---
 
@@ -315,6 +364,8 @@ Each layer defines: **input**, **output**, **allowed actions**, **forbidden acti
 
 > Must **not modify trusted packets**.
 
+Current implementation: stub in `layers/anti_analysis.c` (returns pass).
+
 ---
 
 ## 10. Offensive Shell
@@ -333,72 +384,207 @@ Each layer defines: **input**, **output**, **allowed actions**, **forbidden acti
 
 > Must **not touch session data**.
 
+Current implementation: stub in `layers/offensive.c` (returns pass).
+
 ---
 
 ## 11. Packet Model
 
-### Header Fields
+### Header Layout (24 bytes)
 
-| Field | Description |
+| Offset | Size | Field | Description |
+|---|---|---|---|
+| 0 | 4 | `magic` | Protocol magic: `0xAABBCCDD` (little-endian) |
+| 4 | 1 | `version` | Protocol version: `0x01` |
+| 5 | 1 | `flags` | Bitfield: `0x01` = encrypted, `0x00` = plain |
+| 6 | 8 | `session_id` | 64-bit session identifier (CSPRNG-generated) |
+| 14 | 1 | `channel_id` | Channel number: 1 (CONTROL) through 5 (ROUTE) |
+| 15 | 4 | `seq` | Monotonically increasing sequence number per channel |
+| 19 | 4 | `length` | Total payload length after header (see encrypted layout) |
+| 23 | 1 | _reserved_ | Currently unused, must be zero |
+
+### Plain Packet Layout
+
+```
+[24-byte header] [payload: length bytes]
+```
+
+- `flags == 0x00`
+- `payload` starts at offset 24
+- `length` is actual payload size
+
+### Encrypted Packet Layout
+
+```
+[24-byte header] [12-byte nonce] [ciphertext: length - 28 bytes] [16-byte tag]
+```
+
+- `flags == 0x01` (PACKET_FLAG_ENCRYPTED)
+- `nonce` at offset 24, 12 bytes
+- `ciphertext` starts at offset 36
+- `tag` at offset `24 + length - AEAD_TAG_SIZE`, 16 bytes
+- The `length` field covers: nonce(12) + ciphertext + tag(16)
+- Minimum encrypted payload length: 28 bytes (12 nonce + 0 data + 16 tag)
+
+### AEAD Parameters
+
+| Parameter | Value |
 |---|---|
-| `magic` | Protocol identifier (fixed bytes) |
-| `version` | Protocol version number |
-| `flags` | Packet type / control flags |
-| `session_id` | Unique session identifier |
-| `channel_id` | Channel number (1–5) |
-| `seq` | Monotonically increasing sequence number |
-| `nonce` | Unique per-packet nonce for AEAD |
-| `length` | Payload length in bytes |
-| `tag` | AEAD authentication tag |
+| Algorithm | ChaCha20-Poly1305 |
+| Key size | 32 bytes (session key) |
+| Nonce size | 12 bytes |
+| Tag size | 16 bytes |
+| AAD size | 24 bytes (header with mods) |
 
-### Field Rules
+### Nonce Construction
 
-| Rule | Constraint |
+The 12-byte nonce is deterministic — no per-packet random number generator:
+
+| Byte(s) | Source |
 |---|---|
-| `seq` | Must strictly increase; no gaps allowed |
-| `nonce` | Must never repeat within session lifetime |
-| `length` | Must exactly match actual payload size |
-| `tag` | Must verify before decryption proceeds |
+| 0–7 | `session_id` (little-endian) |
+| 8 | `channel_id` |
+| 9 | Zero (`0x00`) |
+| 10–11 | `seq` (big-endian) |
+
+Nonce uniqueness is guaranteed by the session_id + channel_id + seq tuple.
+The sequence number is strictly monotonic per channel, so nonce never repeats within a session.
+
+### AAD Construction
+
+The AAD is 24 bytes, constructed as follows:
+1. Copy the raw 24-byte header
+2. Clear bit 0 of the `flags` byte (byte 5): `aad[5] &= ~0x01`
+3. XOR-fold the per-channel key into the AAD:
+   ```
+   for i in 0..23:
+       aad[i] ^= channel_keys[channel_id][i & 31]
+   ```
+
+This binds each encrypted packet to its claimed channel. Tampering with `channel_id` causes AEAD tag verification failure.
+
+### parse Invariants
+
+- `buf->len >= 24` (minimum header size)
+- `length <= MAX_PACKET_SIZE - 24` (MAX_PACKET_SIZE = 2048)
+- `buf->len == 24 + length` (exact match)
+- If `PACKET_FLAG_ENCRYPTED` set: `length >= 28` (nonce + minimum tag)
+- Parser strips nonce and tag from payload pointers; `out->payload` points to ciphertext
+- Parser sets `out->tag` to the 16-byte tag pointer; `out->nonce` to the 12-byte nonce
+- Packet is parsed exactly once per pipeline walk (RULE-11)
 
 ---
 
 ## 12. Session Protocol
 
-### Handshake Sequence
+### Handshake Sequence (6 Messages)
 
 ```
 Initiator                          Responder
     │                                  │
-    │──── HELLO ──────────────────────▶│
+    │──── HELLO (CTRL=1) ────────────▶│  session_id=0, kem_type
     │                                  │
-    │◀─── PQ KEM (encapsulation) ──────│
+    │◀─── ACCEPT (CTRL=2) ────────────│  session_id (CSPRNG)
     │                                  │
-    │  [both derive shared secret]     │
+    │──── PQ KEM INIT (CTRL=3) ──────▶│  1184B ML-KEM 768 public key
     │                                  │
-    │──── Encrypted Identity ─────────▶│
+    │◀─── PQ KEM RESPONSE (CTRL=4) ───│  1088B ciphertext
     │                                  │
-    │  [Signature Verify]              │
+    │  [both derive shared secret]     │  kem_decapsulate
     │                                  │
-    │  [Key Derivation]                │
+    │──── IDENTITY PROOF (CTRL=5) ───▶│  HMAC-SHA256 sig(64) + identity_hash(32)
     │                                  │
-    │◀══ SESSION LOCKED ══════════════▶│
+    │  [Signature Verify]              │  HMAC-SHA256 verification
+    │                                  │
+    │  [Key Derivation]                │  HKDF(shared_secret, transcript_hash)
+    │                                  │
+    │◀══ SESSION LOCKED (CTRL=6) ═════│  symmetric AEAD mode active
 ```
 
-### Handshake Steps
+### Handshake Opcodes
 
-1. `HELLO` — initiate connection, exchange parameters
-2. `PQ KEM` — post-quantum key encapsulation
-3. `Shared Secret` — derive shared secret from KEM result
-4. `Encrypted Identity` — transmit identity under session key
-5. `Signature Verify` — verify peer identity signature
-6. `Key Derive` — derive session and channel keys
-7. `Lock` — session transitions to LOCKED state
+| Code | Constant | Sender | Payload |
+|---|---|---|---|
+| 1 | `CTRL_HELLO` | Initiator | opcode(1) |
+| 2 | `CTRL_ACCEPT` | Responder | opcode(1) + session_id(8) |
+| 3 | `CTRL_PQ_KEM_INIT` | Initiator | opcode(1) + public_key(1184) |
+| 4 | `CTRL_PQ_KEM_RESPONSE` | Responder | opcode(1) + ciphertext(1088) |
+| 5 | `CTRL_IDENTITY_PROOF` | Initiator | opcode(1) + signature(64) + identity_hash(32) |
+| 6 | `CTRL_SESSION_LOCKED` | Responder | opcode(1) |
+| 7 | `CTRL_HANDSHAKE_ERROR` | Either | opcode(1) + error_code(1) |
+
+### Handshake Sub-States (Internal state enum)
+
+| State | Meaning |
+|---|---|
+| `SESSION_IDLE` | No handshake in progress |
+| `SESSION_HANDSHAKE_START` | Handshake initialized, awaiting first response |
+| `SESSION_PQ_KEM_INIT_SENT` | KEM public key sent, awaiting ciphertext |
+| `SESSION_PQ_KEM_RESPONSE_SENT` | KEM ciphertext received, identity pending |
+| `SESSION_IDENTITY_PROOF_SENT` | Identity sent, awaiting lock |
+| `SESSION_LOCKED` | Session established, symmetric encryption active |
+
+### State Transition Rules
+
+Each state accepts only specific incoming opcodes; any other opcode triggers `HS_ERR_STATE_VIOLATION`:
+
+| Current State | Accepted Opcodes |
+|---|---|
+| `SESSION_HANDSHAKE_START` | ACCEPT (initiator) / HELLO (responder) |
+| `SESSION_PQ_KEM_INIT_SENT` | KEM_RESPONSE |
+| `SESSION_PQ_KEM_RESPONSE_SENT` | IDENTITY_PROOF |
+| `SESSION_IDENTITY_PROOF_SENT` | SESSION_LOCKED |
+| `SESSION_LOCKED` | None (KEM_INIT and KEM_RESPONSE are rejected with `failures_state++`) |
+
+### Transcript Hash
+
+A SHA-256 rolling hash of all handshake messages is maintained in `handshake_crypto_t.transcript_hash[32]`.
+
+- Initial value: all zeros
+- Each handshake message payload is appended: `transcript = SHA-256(transcript || payload)`
+- The transcript is used as the salt for HKDF-extract during key derivation
+- The transcript snapshot before adding `IDENTITY_PROOF` is used for signature verification
+
+### Identity Verification
+
+| Parameter | Value |
+|---|---|
+| Algorithm | HMAC-SHA256 |
+| Key | 32-byte pre-shared identity master key (hardcoded for demo, secure store in production) |
+| Identity hash | `SHA-256(identity_master_key)` — 32 bytes |
+| Signature | `HMAC-SHA256(identity_master_key, transcript_hash)` — first 32 bytes of 64-byte field (rest zeroed) |
+
+Verification flow:
+1. Responder receives IDENTITY_PROOF
+2. Captures transcript hash before adding IDENTITY_PROOF payload
+3. Computes `expected = HMAC-SHA256(g_identity_master_key, pre_update_transcript)`
+4. Compares first 32 bytes of received signature with `expected`
+5. On mismatch: sets `HS_ERR_BAD_IDENTITY`, increments `g_handshake_stats.failures_identity`
+
+### Error Codes
+
+| Code | Constant | Meaning |
+|---|---|---|
+| 0 | `HS_ERR_NONE` | No error |
+| 1 | `HS_ERR_UNSUPPORTED_KEM` | KEM type not supported |
+| 2 | `HS_ERR_BAD_IDENTITY` | Identity verification failed |
+| 3 | `HS_ERR_TIMEOUT` | Handshake timed out |
+| 4 | `HS_ERR_REPLAY` | Replay detected |
+| 5 | `HS_ERR_STATE_VIOLATION` | Invalid state transition |
+
+### Session ID Generation
+
+- Generated via `kem_random_bytes()` which calls `getrandom()` (Linux) or `CryptGenRandom` (Windows)
+- Both sides: responder generates in `handshake_build_accept`, initiator adopts via ACCEPT payload
+- 64-bit random value, CSPRNG-backed (no `rand()` anywhere in the handshake path)
+- Session ID seeds the transcript and is compared by session gate post-lock
 
 ### Post-Handshake Rules
 
 - **Symmetric only** — PQ primitives not used after lock (RULE-3)
-- **Key rotation** — allowed without session interruption
+- **Key rotation** — allowed without session interruption (not yet implemented)
 - **No re-handshake** — handshake runs exactly once per session
+- **CONTROL bypass** — CONTROL channel packets skip session_enc, pass through session gate only
 
 ---
 
@@ -406,20 +592,40 @@ Initiator                          Responder
 
 ### Channel Map
 
-| Channel ID | Name | Purpose |
-|---|---|---|
-| `1` | `CONTROL` | Session control, rekey, hop commands |
-| `2` | `AUDIO` | Real-time voice / audio stream |
-| `3` | `CHAT` | Encrypted text messaging |
-| `4` | `FILE` | Bulk file transfer |
-| `5` | `ROUTE` | Relay and mesh routing |
+| Channel ID | Name | Purpose | Encrypted |
+|---|---|---|---|
+| `1` | `CONTROL` | Session control, rekey, hop commands | No (bypasses session_enc) |
+| `2` | `AUDIO` | Real-time voice / audio stream | Yes |
+| `3` | `CHAT` | Encrypted text messaging | Yes |
+| `4` | `FILE` | Bulk file transfer | Yes |
+| `5` | `ROUTE` | Relay and mesh routing | Yes |
 
 ### Per-Channel State
 
 | Field | Description |
 |---|---|
 | `channel_seq` | Independent sequence counter per channel |
-| `channel_key` | Dedicated encryption key per channel |
+| `channel_key` | Per-channel derived key (32 bytes, from HKDF) |
+
+### Channel Key Derivation
+
+Each channel key is independently derived via HKDF-expand using the PRK (from HKDF-extract) and a unique label:
+
+```
+PRK = HKDF-extract(transcript_hash, kem_shared_secret)
+
+session_key = HKDF-expand(PRK, "SCv1 session key")
+channel_0   = HKDF-expand(PRK, "SCv1 channel key 0")   // CONTROL
+channel_1   = HKDF-expand(PRK, "SCv1 channel key 1")   // AUDIO
+channel_2   = HKDF-expand(PRK, "SCv1 channel key 2")   // CHAT
+channel_3   = HKDF-expand(PRK, "SCv1 channel key 3")   // FILE
+channel_4   = HKDF-expand(PRK, "SCv1 channel key 4")   // ROUTE
+```
+
+### Channel Binding
+
+The per-channel key is XOR-folded into the AEAD AAD (see §11 AAD Construction).
+This ensures that a packet claiming `channel_id=N` can only be decrypted with `channel_key[N]`.
 
 ### Channel Rules
 
@@ -450,26 +656,28 @@ Initiator                          Responder
 - Priority strictly enforced
 - No starvation protection required for `fake` queue
 
+Current implementation: `core/scheduler.c` with ring buffers per priority.
+
 ---
 
 ## 15. Thread Model
 
 ### Thread Roster
 
-| Thread | Responsibility |
-|---|---|
-| `rx` | Receive UDP packets from NIC |
-| `tx` | Transmit packets to NIC |
-| `crypto` | Encryption / decryption operations |
-| `control` | Session control and state machine |
-| `resilience` | FEC, multipath, reconnect logic |
-| `monitor` | Health checks, metrics, watchdog |
-| `audio` | Audio encode/decode pipeline |
-| `cli` | CLI command interface |
+| Thread | Responsibility | Current impl |
+|---|---|---|
+| `rx` | Receive UDP packets from NIC | `core/rx_thread.c` — posix/win32 |
+| `tx` | Transmit packets to NIC | `core/tx_thread.c` — posix/win32 |
+| `crypto` | Encryption / decryption operations | Inline in session_enc (no dedicated thread) |
+| `control` | Session control and state machine | `main.c` — synchronous in event loop |
+| `resilience` | FEC, multipath, reconnect logic | Not yet implemented |
+| `monitor` | Health checks, metrics, watchdog | Not yet implemented |
+| `audio` | Audio encode/decode pipeline | Not yet implemented |
+| `cli` | CLI command interface | Not yet implemented |
 
 ### Thread Communication Rules
 
-- All inter-thread communication via **lock-free queues**
+- All inter-thread communication via **lock-free queues** (spsc_ring)
 - **No blocking** between threads
 - No mutex in audio path (RULE-10)
 - CLI must not access UDP directly (RULE-18)
@@ -480,18 +688,20 @@ Initiator                          Responder
 
 ### Capabilities
 
-| Feature | Description |
-|---|---|
-| `multipath` | Simultaneously use multiple network paths |
-| `relay` | Route through trusted relay nodes |
-| `FEC` | Forward Error Correction for packet loss |
-| `port hop` | Dynamically change UDP port |
-| `reconnect` | Re-establish transport without session loss |
-| `adaptive bitrate` | Adjust audio quality to network conditions |
+| Feature | Description | Status |
+|---|---|---|
+| `multipath` | Simultaneously use multiple network paths | Planned |
+| `relay` | Route through trusted relay nodes | Planned |
+| `FEC` | Forward Error Correction for packet loss | Planned |
+| `port hop` | Dynamically change UDP port | Planned |
+| `reconnect` | Re-establish transport without session loss | Planned |
+| `adaptive bitrate` | Adjust audio quality to network conditions | Planned |
 
 ### Critical Rule
 
 > Resilience operations **must not change session ID** (RULE-15). The session layer is transparent to transport changes.
+
+Current implementation: stub in `layers/resilience.c` (returns pass).
 
 ---
 
@@ -499,39 +709,54 @@ Initiator                          Responder
 
 ### Key Hierarchy
 
-| Key | Scope |
-|---|---|
-| `master` | Long-term identity key |
-| `session` | Per-session symmetric key |
-| `channel` | Per-channel derived key |
+| Key | Scope | Size | Derivation |
+|---|---|---|---|
+| `master` | Long-term identity key | 32 bytes | Pre-shared (hardcoded for demo) |
+| `session` | Per-session symmetric key | 32 bytes | HKDF-expand(PRK, "SCv1 session key") |
+| `channel` | Per-channel derived keys (×5) | 32 bytes each | HKDF-expand(PRK, "SCv1 channel key N") |
+
+### Key Derivation Details
+
+The HKDF operation uses SHA-256:
+
+```
+PRK = HMAC-SHA256(salt=transcript_hash, ikm=kem_shared_secret)
+       ↑ HKDF-Extract
+       
+Output key material = HKDF-Expand(PRK, label, L)
+                     = T(1) || T(2) || ...
+       where T(1) = HMAC-SHA256(PRK, label || 0x01)
+             T(i) = HMAC-SHA256(PRK, T(i-1) || label || i)
+```
 
 ### Storage Rules
 
-| Rule | Requirement |
-|---|---|
-| Secure memory | Keys stored in locked, non-swappable memory |
-| Zero after use | Keys zeroed immediately when no longer needed |
-| No swap | Memory pages containing keys must be pinned |
-| No log | Key material must never appear in logs |
-| Never leave store | RULE-14: keys never leave secure storage |
+| Rule | Requirement | Current compliance |
+|---|---|---|
+| Secure memory | Keys stored in locked, non-swappable memory | Stack-only (no heap allocation) |
+| Zero after use | Keys zeroed immediately when no longer needed | `crypto_secure_wipe()` on KEM secret key and shared secret post-derivation |
+| No swap | Memory pages containing keys must be pinned | Stack frames not guaranteed (future hardening) |
+| No log | Key material must never appear in logs | No key material is logged |
+| Never leave store | RULE-14: keys never leave secure storage | Compliant (keys in `session_t` struct, never exported) |
 
 ### Rotation
 
 - Rotation allowed during active session
 - Rotation must **not stop stream**
 - Both peers must confirm new key before old key is zeroed
+- Not yet implemented (requires rekey protocol on CONTROL channel)
 
 ---
 
 ## 18. Performance Constraints
 
-| Metric | Requirement |
-|---|---|
-| Audio latency | **< 20 ms** end-to-end |
-| CPU usage (normal) | **< 15%** of single core |
-| Packet rate | **≥ 1,000 packets/second** |
-| Loss tolerance | **≥ 30%** packet loss with FEC active |
-| Fast path allocation | **Zero** — no malloc in hot path |
+| Metric | Requirement | Current status |
+|---|---|---|
+| Audio latency | **< 20 ms** end-to-end | Not yet measured |
+| CPU usage (normal) | **< 15%** of single core | Not yet profiled |
+| Packet rate | **≥ 1,000 packets/second** | Pipeline overhead measured (loop at ~1ms/tick) |
+| Loss tolerance | **≥ 30%** packet loss with FEC active | FEC not yet implemented |
+| Fast path allocation | **Zero** — no malloc in hot path | Compliant: `aead.c` uses stack buffers, `session_enc.c` uses stack AAD |
 
 ---
 
@@ -539,16 +764,40 @@ Initiator                          Responder
 
 ### Protected
 
-| Property | Mechanism |
-|---|---|
-| `payload` | AEAD encryption (session + channel keys) |
-| `identity` | PQ KEM + signature verification |
-| `session` | Exclusive session gate + session ID |
-| `channel` | Per-channel independent keys |
-| `replay` | Replay window always active (RULE-16) |
-| `spoof` | Session gate + peer IP/port binding |
-| `MITM` | PQ handshake + identity signature |
-| `scan` | Anti-analysis layer + static shell |
+| Property | Mechanism | Phase |
+|---|---|---|
+| `payload` | ChaCha20-Poly1305 AEAD with session key | Phase 3 ✅ |
+| `identity` | ML-KEM 768 + HMAC-SHA256 signature verification | Phase 3 ✅ |
+| `session` | Exclusive session gate + CSPRNG session ID | Phase 3 ✅ |
+| `channel` | Per-channel independent keys + AAD channel binding | Phase 3 ✅ |
+| `replay` | Replay window always active (RULE-16) | Phase 2 ✅ |
+| `spoof` | Session gate + peer IP/port binding | Phase 2 ✅ |
+| `MITM` | PQ handshake + identity signature verification | Phase 3 ✅ |
+| `scan` | Anti-analysis layer + static shell | Stub only |
+
+### Layer Security Model
+
+```
+Outer layers (offensive, anti-analysis, static):
+  - structural validation only
+  - no crypto, no keys, no plaintext
+
+Session gate:
+  - session_id + IP/port binding
+  - drops unknown traffic before crypto
+
+Session enc:
+  - ChaCha20-Poly1305 with session key
+  - AAD bound to channel key
+  - fail-closed on tag mismatch
+
+Channel enc:
+  - per-channel HMAC key binding (via AAD)
+  - no separate per-packet tag (single-layer AEAD)
+
+Channel demux:
+  - routes decrypted plaintext to application
+```
 
 ### NOT Guaranteed
 
@@ -564,25 +813,37 @@ Initiator                          Responder
 
 ### CLI Commands
 
-| Command | Description |
-|---|---|
-| `connect` | Initiate connection to peer |
-| `disconnect` | Gracefully close session |
-| `status` | Display session and channel status |
-| `chat` | Send encrypted chat message |
-| `sendfile` | Initiate file transfer |
-| `bitrate` | Set / query audio bitrate |
-| `cover` | Toggle cover traffic generation |
-| `rekey` | Trigger manual key rotation |
-| `hop` | Trigger port hop |
-| `relay` | Set relay node |
-| `quit` | Terminate application |
+| Command | Description | Status |
+|---|---|---|
+| `connect` | Initiate connection to peer | Built into main.c (automatic) |
+| `disconnect` | Gracefully close session | Not yet implemented |
+| `status` | Display session and channel status | Automatic stats in main.c |
+| `chat` | Send encrypted chat message | Demo only (hardcoded in main.c) |
+| `sendfile` | Initiate file transfer | Not yet implemented |
+| `bitrate` | Set / query audio bitrate | Not yet implemented |
+| `cover` | Toggle cover traffic generation | Not yet implemented |
+| `rekey` | Trigger manual key rotation | Not yet implemented |
+| `hop` | Trigger port hop | Not yet implemented |
+| `relay` | Set relay node | Not yet implemented |
+| `quit` | Terminate application | SIGINT handler |
 
 ### Chat Rules
 
-- Chat channel must be **encrypted** (channel key)
+- Chat channel must be **encrypted** (ChaCha20-Poly1305 session key, channel binding)
 - Chat must **not block audio** (RULE-6 enforced via scheduler)
 - CLI must not access UDP directly (RULE-18)
+
+### Current Demo Flow
+
+As implemented in `main.c`:
+1. Both sides initialize on localhost (::1, ports 9001/9002)
+2. Initiator builds and sends HELLO
+3. Responder accepts, generates session_id, sends ACCEPT
+4. Initiator generates ML-KEM 768 keypair, sends KEM_INIT (public key)
+5. Responder encapsulates shared secret, derives session keys, sends KEM_RESPONSE (ciphertext)
+6. Initiator decapsulates shared secret, builds IDENTITY_PROOF (HMAC signature)
+7. Responder verifies identity, derives session keys, sends SESSION_LOCKED
+8. Both sides locked: chat messages exchanged with AEAD encryption
 
 ---
 
@@ -590,33 +851,91 @@ Initiator                          Responder
 
 ### Fast Path Requirements
 
-| Constraint | Rule |
-|---|---|
-| Single parse | Packet parsed exactly once (RULE-11) |
-| Zero copy | No unnecessary data copies |
-| Fixed buffers | Pre-allocated, no runtime malloc |
-| Constant time | Crypto operations constant time |
-| No malloc | Zero dynamic allocation in fast path (RULE-8) |
-| No logging | Zero log writes in fast path (RULE-9) |
+| Constraint | Rule | Compliance |
+|---|---|---|
+| Single parse | Packet parsed exactly once (RULE-11) | ✅ `packet_parse` called once per pipeline walk |
+| Zero copy | No unnecessary data copies | ✅ In-place AEAD decrypt |
+| Fixed buffers | Pre-allocated, no runtime malloc | ✅ Packet pool (4096 buffers) |
+| Constant time | Crypto operations constant time | ✅ ChaCha20-Poly1305, SHA-256, HMAC are data-independent |
+| No malloc | Zero dynamic allocation in fast path (RULE-8) | ✅ Stack buffers only in aead.c, session_enc.c |
+| No logging | Zero log writes in fast path (RULE-9) | ✅ No printf in aead.c encrypt/decrypt; session_enc.c decrypt fail returns silently |
 
 ### Ordering Requirements
 
-| Constraint | Rule |
+| Constraint | Rule | Compliance |
+|---|---|---|
+| Gate before decrypt | Session gate always runs first (RULE-1) | ✅ `session_gate.c` runs before `session_enc.c` in pipeline |
+| Scheduler before encrypt | Scheduling before outbound encryption (RULE-5) | ✅ Scheduler runs tx dequeues before `session_enc_apply` |
+
+### Source File Map
+
+| File | Responsibility |
 |---|---|
-| Gate before decrypt | Session gate always runs first (RULE-1) |
-| Scheduler before encrypt | Scheduling before outbound encryption (RULE-5) |
+| `core/session.h` | Session struct, opcodes, state enum, keys |
+| `core/packet_view.h` | `packet_view_t`, `packet_buf_t`, nonce/tag fields |
+| `core/pool.c` | Pre-allocated packet buffer pool |
+| `crypto/kem.c` | ML-KEM 768 wrappers, CSPRNG (`kem_random_bytes`) |
+| `crypto/hkdf.c` | HKDF-extract/expand, `derive_session_keys` |
+| `crypto/aead.c` | ChaCha20-Poly1305 encrypt/decrypt (no malloc, no printf) |
+| `handshake/handshake.c` | Handshake builders, state machine, transcript, identity |
+| `layers/packet_parse.c` | Single-pass packet parsing |
+| `layers/static_shell.c` | Magic/version/flags/length/channel validation |
+| `layers/session_gate.c` | Session ID + peer address binding |
+| `layers/seq_check.c` | Replay window (64-bit bitmap) |
+| `layers/session_enc.c` | Session-level AEAD encrypt/decrypt (AAD with channel binding) |
+| `layers/channel_enc.c` | Per-channel verification stub |
+| `layers/rx_demux.c` | Channel dispatch |
+| `pipeline/pipeline_inbound.c` | Inbound layer chain |
 
 ---
 
-## 22. Final Status
+## 22. Implementation Status
 
-| Field | Value |
-|---|---|
-| **Architecture** | ✅ LOCKED |
-| **Specification** | ✅ FINAL |
-| **Implementation Ready** | ✅ YES |
+| Layer | Phase | Status | File |
+|---|---|---|---|
+| Offensive Shell | Future | Stub | `layers/offensive.c` |
+| Anti-Analysis | Future | Stub | `layers/anti_analysis.c` |
+| Static Shell | Phase 1 | ✅ Complete | `layers/static_shell.c` |
+| Kernel Filter | Future | Stub | `layers/kernel_filter_stub.c` |
+| Session Gate | Phase 1 | ✅ Complete | `layers/session_gate.c` |
+| Resilience | Future | Stub | `layers/resilience.c` |
+| Control / Handshake | Phase 2 | ✅ Complete | `handshake/handshake.c`, `main.c` |
+| Session Enc (AEAD) | Phase 3 | ✅ Complete | `layers/session_enc.c`, `crypto/aead.c` |
+| Channel Enc (Binding) | Phase 3 | ✅ Complete | AAD channel binding in `session_enc.c` |
+| Channel Demux | Phase 1 | ✅ Complete | `layers/rx_demux.c` / `layers/channel.c` |
+| CSPRNG | Phase 3 | ✅ Complete | `crypto/kem.c` (`kem_random_bytes`) |
+| Identity (HMAC) | Phase 3 | ✅ Complete | `handshake/handshake.c` |
+| CLI | Future | Not started | — |
+| Key Rotation | Future | Not started | — |
+| Resilience | Future | Not started | — |
+
+### Phase Summary
+
+| Phase | Description | Status |
+|---|---|---|
+| Phase 1 | Core transport, pipeline, layer stack | ✅ Complete |
+| Phase 2 | PQ handshake (ML-KEM 768), state machine, key derivation | ✅ Complete |
+| Phase 3 | AEAD session encryption, CSPRNG, identity verification, channel binding | ✅ Complete |
+| Phase 4 | Resilience (FEC, multipath, reconnect) | 📋 Planned |
+| Phase 5 | Outer defense layers (kernel filter, anti-analysis, offensive) | 📋 Planned |
+| Phase 6 | Operational hardening, CLI, key rotation | 📋 Planned |
+
+### Verification Output (Current)
+
+```
+[HANDSHAKE] identity verified OK
+[INIT CHAT] hey from responder!
+[RESP CHAT] hello from initiator!
+[STATS] init=LOCKED resp=LOCKED pool=4096 attempts=1 ok=1 fail=0 enc=on
+```
 
 ---
 
 > *Secure Full-Duplex Post-Quantum SSM Communication System — Final Engineering Specification v1.0*
 > *Document status: LOCKED. No structural changes permitted after this version.*
+
+### Referenced Documents
+
+- `PHASE1_WIRE_CONTRACT.md` — Wire format, header layout, AEAD nonce/tag, validation rules
+- `IMPLEMENTATION_PHASE_STATUS.md` — Detailed implementation status and phase roadmap
+- `AGENTS.md` — Quick reference for developers working on this codebase
