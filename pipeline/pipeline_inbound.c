@@ -24,7 +24,7 @@ pipeline_result_t pipeline_inbound_process(packet_buf_t* p, pipeline_ctx_t* ctx)
 
     if (session_check(ctx->sess, &view) != 0) return PIPELINE_DROP_SESSION;
 
-    if (resilience_check(&view) != 0) return PIPELINE_DROP_RESILIENCE;
+    if (resilience_check(&view, ctx->sess) != 0) return PIPELINE_DROP_RESILIENCE;
 
     /* phase 3: decrypt session layer, then channel layer */
     if (view.encrypted) {

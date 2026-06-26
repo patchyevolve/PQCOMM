@@ -27,6 +27,7 @@ set(SRC
     layers/session_enc.c
     layers/channel_enc.c
     core/scheduler.c
+    core/resilience_ctx.c
     layers/seq_check.c
     layers/rx_demux.c
     pipeline/pipeline_inbound.c

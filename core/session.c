@@ -1,5 +1,6 @@
 #include "session.h"
 #include "kem.h"
+#include "resilience_ctx.h"
 #include <string.h>
 #include <stdlib.h>
 
@@ -65,6 +66,7 @@ void session_init(session_t* s)
     memset(s, 0, sizeof(session_t));
     s->state = SESSION_IDLE;
     s->role = ROLE_UNASSIGNED;
+    resilience_init(&s->resilience);
 }
 
 void session_reset(session_t* s)

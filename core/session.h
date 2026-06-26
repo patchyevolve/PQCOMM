@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <string.h>
 #include "packet.h"
+#include "resilience_ctx.h"
 
 #define REPLAY_WINDOW_SIZE 64
 
@@ -79,6 +80,7 @@ typedef struct {
     handshake_role_t role;
     handshake_crypto_t hs;
     session_keys_t keys;
+    resilience_t resilience;
     uint8_t handshake_complete;
 } session_t;
 
