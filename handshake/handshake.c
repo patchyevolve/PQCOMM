@@ -8,6 +8,15 @@
 #include <string.h>
 #include <stdlib.h>
 #include <mbedtls/sha256.h>
+#include <mbedtls/md.h>
+
+/* long-term identity key for the demo (in production this comes from secure store) */
+static const uint8_t g_identity_master_key[32] = {
+    0x6b, 0xe5, 0x79, 0x3e, 0x7a, 0x1f, 0x2c, 0xd4,
+    0x91, 0x82, 0x5a, 0x0d, 0x3b, 0xf8, 0x44, 0x97,
+    0x1c, 0x63, 0xae, 0x90, 0xf5, 0x28, 0xbb, 0x50,
+    0xcf, 0x21, 0x65, 0xde, 0x09, 0x74, 0x80, 0x3e
+};
 
 handshake_stats_t g_handshake_stats = { 0 };
 
@@ -77,9 +86,20 @@ int handshake_init_initiator(session_t* sess, uint8_t kem_type)
     sess->hs.timeout_ms = PHASE2_HANDSHAKE_TIMEOUT_MS;
     sess->hs.messages_exchanged = 0;
 
-    /* seed transcript with session id so replays across sessions fail */
+    kem_random_bytes((uint8_t*)&sess->session_id, sizeof(sess->session_id));
+
+    /* compute our identity hash: SHA-256(g_identity_master_key) */
+    {
+        mbedtls_sha256_context ctx;
+        mbedtls_sha256_init(&ctx);
+        mbedtls_sha256_starts(&ctx, 0);
+        mbedtls_sha256_update(&ctx, g_identity_master_key, 32);
+        mbedtls_sha256_finish(&ctx, sess->hs.our_identity_hash);
+        mbedtls_sha256_free(&ctx);
+    }
+
+    /* transcript seeded from session id in ACCEPT payload */
     memset(sess->hs.transcript_hash, 0, 32);
-    memcpy(sess->hs.transcript_hash, &sess->session_id, sizeof(sess->session_id));
 
     printf("[HANDSHAKE] initiator started, session %llu\n",
            (unsigned long long)sess->session_id);
@@ -97,8 +117,17 @@ int handshake_init_responder(session_t* sess, uint8_t kem_type)
     sess->hs.timeout_ms = PHASE2_HANDSHAKE_TIMEOUT_MS;
     sess->hs.messages_exchanged = 0;
 
+    /* compute our identity hash: SHA-256(g_identity_master_key) */
+    {
+        mbedtls_sha256_context ctx;
+        mbedtls_sha256_init(&ctx);
+        mbedtls_sha256_starts(&ctx, 0);
+        mbedtls_sha256_update(&ctx, g_identity_master_key, 32);
+        mbedtls_sha256_finish(&ctx, sess->hs.our_identity_hash);
+        mbedtls_sha256_free(&ctx);
+    }
+
     memset(sess->hs.transcript_hash, 0, 32);
-    memcpy(sess->hs.transcript_hash, &sess->session_id, sizeof(sess->session_id));
     return 0;
 }
 
@@ -133,8 +162,8 @@ int handshake_build_accept(session_t* sess, packet_buf_t* out, uint32_t* seq_cou
 {
     if (!sess || !out || !seq_counter) return -1;
 
-    /* todo: use csprng instead of rand() */
-    uint64_t session_id = ((uint64_t)rand() << 32) | rand();
+    uint64_t session_id;
+    kem_random_bytes((uint8_t*)&session_id, sizeof(session_id));
     sess->session_id = session_id;
 
     uint8_t* d = out->data;
@@ -291,7 +320,16 @@ int handshake_build_identity(session_t* sess, packet_buf_t* out,
     memcpy(d + 19, &payload_len, sizeof(payload_len));
     memcpy(d + 24, &opcode, sizeof(opcode));
 
-    memset(d + 25, 0xAB, 64);
+    /* signature = HMAC-SHA256(identity_master_key, transcript_hash) */
+    {
+        const mbedtls_md_info_t* md =
+            mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+        uint8_t sig[32];
+        mbedtls_md_hmac(md, g_identity_master_key, 32,
+                        sess->hs.transcript_hash, 32, sig);
+        memcpy(d + 25, sig, 32);
+        memset(d + 25 + 32, 0, 32);
+    }
     memcpy(d + 25 + 64, sess->hs.our_identity_hash, 32);
 
     out->len = 24 + payload_len;
@@ -502,6 +540,10 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet,
         return HS_ERROR;
     }
 
+    /* capture transcript before the update for identity proof verification */
+    uint8_t pre_update_transcript[32];
+    memcpy(pre_update_transcript, sess->hs.transcript_hash, 32);
+
     update_transcript(sess, view->payload, view->length);
 
     switch (opcode) {
@@ -536,8 +578,23 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet,
     case CTRL_IDENTITY_PROOF:
         /* opcode(1) + sig(64) + hash(32) = 97 minimum */
         if (view->length < 97) return HS_ERROR;
+        {
+            /* verify HMAC-SHA256(identity_master_key, transcript_hash) */
+            const mbedtls_md_info_t* md =
+                mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+            uint8_t expected_sig[32];
+            mbedtls_md_hmac(md, g_identity_master_key, 32,
+                            pre_update_transcript, 32, expected_sig);
+            if (memcmp(view->payload + 1, expected_sig, 32) != 0) {
+                printf("[HANDSHAKE] identity verification FAILED\n");
+                sess->hs.last_error = HS_ERR_BAD_IDENTITY;
+                g_handshake_stats.failures_identity++;
+                return HS_ERROR;
+            }
+        }
         memcpy(sess->hs.peer_identity_hash, view->payload + 65, 32);
         sess->hs.identity_verified = 1;
+        printf("[HANDSHAKE] identity verified OK\n");
         return HS_NEED_MORE;
 
     case CTRL_SESSION_LOCKED:

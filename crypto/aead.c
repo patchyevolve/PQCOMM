@@ -1,6 +1,6 @@
 #include "aead.h"
+#include "config.h"
 #include <string.h>
-#include <stdlib.h>
 #include <mbedtls/cipher.h>
 
 int aead_encrypt(const uint8_t key[32], const uint8_t nonce[AEAD_NONCE_SIZE],
@@ -22,8 +22,8 @@ int aead_encrypt(const uint8_t key[32], const uint8_t nonce[AEAD_NONCE_SIZE],
         if (mbedtls_cipher_setkey(&ctx, key, 256, MBEDTLS_ENCRYPT) != 0) break;
 
         size_t out_len = plain_len + AEAD_TAG_SIZE;
-        uint8_t* out_buf = malloc(out_len);
-        if (!out_buf) break;
+        uint8_t out_buf[MAX_PACKET_SIZE];
+        if (out_len > sizeof(out_buf)) break;
 
         size_t olen = 0;
         ret = mbedtls_cipher_auth_encrypt_ext(&ctx,
@@ -36,7 +36,6 @@ int aead_encrypt(const uint8_t key[32], const uint8_t nonce[AEAD_NONCE_SIZE],
             memcpy(cipher, out_buf, plain_len);
             memcpy(tag, out_buf + plain_len, AEAD_TAG_SIZE);
         }
-        free(out_buf);
     } while (0);
 
     mbedtls_cipher_free(&ctx);
@@ -63,8 +62,8 @@ int aead_decrypt(const uint8_t key[32], const uint8_t nonce[AEAD_NONCE_SIZE],
         if (mbedtls_cipher_setkey(&ctx, key, 256, MBEDTLS_DECRYPT) != 0) break;
 
         size_t in_len = cipher_len + AEAD_TAG_SIZE;
-        uint8_t* in_buf = malloc(in_len);
-        if (!in_buf) break;
+        uint8_t in_buf[MAX_PACKET_SIZE];
+        if (in_len > sizeof(in_buf)) break;
         memcpy(in_buf, cipher, cipher_len);
         memcpy(in_buf + cipher_len, tag, AEAD_TAG_SIZE);
 
@@ -75,7 +74,6 @@ int aead_decrypt(const uint8_t key[32], const uint8_t nonce[AEAD_NONCE_SIZE],
                                                in_buf, in_len,
                                                plain, cipher_len, &olen,
                                                AEAD_TAG_SIZE);
-        free(in_buf);
     } while (0);
 
     mbedtls_cipher_free(&ctx);

@@ -2,13 +2,19 @@
 #include "aead.h"
 #include "channel.h"
 #include <string.h>
-#include <stdio.h>
 
-static int build_aad(packet_view_t* view, uint8_t aad[HEADER_SIZE])
+static int build_aad(packet_view_t* view, session_t* sess, uint8_t aad[HEADER_SIZE])
 {
     uint8_t* d = view->buf->data;
     memcpy(aad, d, HEADER_SIZE);
     aad[5] &= ~PACKET_FLAG_ENCRYPTED;
+
+    /* channel binding: fold channel key into AAD */
+    if (sess && view->channel_id < 5) {
+        const uint8_t* ck = sess->keys.channel_keys[view->channel_id];
+        for (int i = 0; i < HEADER_SIZE; i++)
+            aad[i] ^= ck[i & 31];
+    }
     return HEADER_SIZE;
 }
 
@@ -19,7 +25,7 @@ int session_enc_check(packet_view_t* p, session_t* sess)
     if (p->channel_id == CH_CONTROL) return 0;
 
     uint8_t aad[HEADER_SIZE];
-    build_aad(p, aad);
+    build_aad(p, sess, aad);
 
     uint8_t* cipher = p->payload;
     uint32_t cipher_len = p->length;
@@ -31,8 +37,6 @@ int session_enc_check(packet_view_t* p, session_t* sess)
                            p->tag,
                            cipher);
     if (ret != 0) {
-        printf("[ENC] session decryption failed: ch=%u seq=%u len=%u\n",
-               p->channel_id, p->seq, cipher_len);
         sess->hs.last_error = HS_ERR_BAD_IDENTITY;
         return -1;
     }
@@ -58,6 +62,12 @@ int session_enc_apply(packet_buf_t* p, packet_view_t* view, session_t* sess)
     uint8_t aad[HEADER_SIZE];
     memcpy(aad, p->data, HEADER_SIZE);
     aad[5] &= ~PACKET_FLAG_ENCRYPTED;
+    /* channel binding: fold channel key into AAD */
+    if (view->channel_id < 5) {
+        const uint8_t* ck = sess->keys.channel_keys[view->channel_id];
+        for (int i = 0; i < HEADER_SIZE; i++)
+            aad[i] ^= ck[i & 31];
+    }
 
     uint8_t nonce[AEAD_NONCE_SIZE];
     memset(nonce, 0, AEAD_NONCE_SIZE);

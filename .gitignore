@@ -11,8 +11,10 @@ Makefile
 install_manifest.txt
 out/
 build/
+build_*/
 **/out/
 **/build/
+**/build_*/
 
 # Compiled object files and binaries
 *.o
