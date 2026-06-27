@@ -342,10 +342,13 @@ Goal: sustain communication quality under loss/jitter/path instability.
    - Encrypted relay forwarding (same session keys, different transport)
    - Route selection based on path quality metrics
 
-7. **Adaptive bitrate**:
-   - Feedback loop: observe loss rate → adjust FEC ratio or audio quality
-   - Integration hooks in audio pipeline (placeholder for Phase 6)
-   - Minimum quality floor to prevent infinite degradation
+7. **Adaptive bitrate** — ✅ COMPLETE
+    - ABR controller (abr_update): observes max path loss rate, adjusts FEC group size
+    - Thresholds: loss < 3% → FEC off; 3-10% → group 8; 10-20% → group 4; > 20% → group 2
+    - Per-session ABR context with 3-second update interval
+    - Integrated into event loop, runs for both initiator and responder
+    - Demo: after initial chat burst, loss=0% → ABR disables FEC (shown as `[ABR] loss=0.0% fec=on group=4 -> off group=0`)
+    - Minimum quality floor: smallest group (2) at high loss prevents infinite degradation
 
 8. **Test scenarios**:
    - Packet loss bursts (0%, 5%, 15%, 30% loss rates)

@@ -37,6 +37,7 @@
 #include "reconnect.h"
 #include "route_table.h"
 #include "relay.h"
+#include "adaptive_bitrate.h"
 
 static volatile int g_running = 1;
 
@@ -68,6 +69,8 @@ static int g_initiator_locked = 0;
 static int g_responder_locked = 0;
 static route_table_t g_route_table;
 static int g_initiator_route_sent = 0;
+static abr_ctx_t g_abr_initiator;
+static abr_ctx_t g_abr_responder;
 
 static void sighandler(int sig)
 {
@@ -405,6 +408,8 @@ int transport_engine_run_demo(void)
 
     pool_init();
     route_table_init(&g_route_table);
+    abr_init(&g_abr_initiator);
+    abr_init(&g_abr_responder);
 
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);
@@ -579,6 +584,15 @@ int transport_engine_run_demo(void)
         if (loop_ticks >= 100) {
             print_stats();
             loop_ticks = 0;
+        }
+
+        /* ABR update (every ~3s via the internal timer check) */
+        if (loop_ticks % 30 == 0) {
+            uint64_t now_ms = (uint64_t)time(NULL) * 1000;
+            if (g_sess_initiator)
+                abr_update(&g_abr_initiator, &g_sess_initiator->resilience, now_ms);
+            if (g_sess_responder)
+                abr_update(&g_abr_responder, &g_sess_responder->resilience, now_ms);
         }
 
         /* heartbeat + reconnect ticks (every ~100ms) */

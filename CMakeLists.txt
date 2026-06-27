@@ -17,6 +17,7 @@ set(LIB_SRC
     lib/engine/transport_engine.c
     lib/engine/heartbeat.c
     lib/engine/reconnect.c
+    lib/engine/adaptive_bitrate.c
     lib/connection/connection_manager.c
     lib/discovery/lan_discovery.c
     lib/core/pool.c
