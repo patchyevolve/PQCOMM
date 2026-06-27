@@ -12,6 +12,14 @@ extern int test_abr_high_loss(void);
 extern int test_path_loss_window(void);
 extern int test_path_state_transition(void);
 extern int test_path_select(void);
+extern int test_kf_whitelist(void);
+extern int test_kf_blocklist(void);
+extern int test_kf_size(void);
+extern int test_kf_port(void);
+extern int test_aa_clean_packet(void);
+extern int test_aa_bad_packet_scoring(void);
+extern int test_off_trusted_bypass(void);
+extern int test_off_repeated_unknown(void);
 
 typedef struct {
     const char* name;
@@ -30,6 +38,14 @@ static test_entry_t all_tests[] = {
     {"test_path_loss_window",          test_path_loss_window},
     {"test_path_state_transition",     test_path_state_transition},
     {"test_path_select",               test_path_select},
+    {"test_kf_whitelist",              test_kf_whitelist},
+    {"test_kf_blocklist",              test_kf_blocklist},
+    {"test_kf_size",                   test_kf_size},
+    {"test_kf_port",                   test_kf_port},
+    {"test_aa_clean_packet",           test_aa_clean_packet},
+    {"test_aa_bad_packet_scoring",     test_aa_bad_packet_scoring},
+    {"test_off_trusted_bypass",        test_off_trusted_bypass},
+    {"test_off_repeated_unknown",      test_off_repeated_unknown},
 };
 static const int num_tests = sizeof(all_tests) / sizeof(all_tests[0]);
 

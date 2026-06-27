@@ -4,7 +4,7 @@
 #include "offensive.h"
 #include "anti_analysis.h"
 #include "static_shell.h"
-#include "kernel_filter_stub.h"
+#include "kernel_filter.h"
 #include "session_gate.h"
 #include "resilience.h"
 #include "pool.h"

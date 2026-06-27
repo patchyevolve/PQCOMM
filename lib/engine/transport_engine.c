@@ -38,6 +38,9 @@
 #include "route_table.h"
 #include "relay.h"
 #include "adaptive_bitrate.h"
+#include "kernel_filter.h"
+#include "anti_analysis.h"
+#include "offensive.h"
 
 static volatile int g_running = 1;
 
@@ -370,13 +373,17 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
 static void print_stats(void)
 {
     printf("[STATS] init=%s resp=%s pool=%u "
-           "attempts=%u ok=%u fail=%u",
+           "attempts=%u ok=%u fail=%u"
+           " kf_drop=%u aa_drop=%u off=%u",
            handshake_state_name(g_sess_initiator ? g_sess_initiator->state : 0),
            handshake_state_name(g_sess_responder ? g_sess_responder->state : 0),
            pool_free_count(),
            g_handshake_stats.attempts_total,
            g_handshake_stats.successes,
-           g_handshake_stats.failures_state);
+           g_handshake_stats.failures_state,
+           g_kernel_filter.drops_port + g_kernel_filter.drops_size + g_kernel_filter.drops_blocked,
+           g_anti_analysis.drops_medium + g_anti_analysis.drops_high,
+           g_offensive.total_decoys);
 
     if (g_sess_initiator && g_sess_initiator->state == 6)
         printf(" enc=on");
@@ -410,6 +417,9 @@ int transport_engine_run_demo(void)
     route_table_init(&g_route_table);
     abr_init(&g_abr_initiator);
     abr_init(&g_abr_responder);
+    kernel_filter_init();
+    anti_analysis_init();
+    offensive_init();
 
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);

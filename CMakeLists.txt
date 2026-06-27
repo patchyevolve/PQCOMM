@@ -33,7 +33,7 @@ set(LIB_SRC
     lib/layers/offensive.c
     lib/layers/anti_analysis.c
     lib/layers/static_shell.c
-    lib/layers/kernel_filter_stub.c
+    lib/layers/kernel_filter.c
     lib/layers/session_gate.c
     lib/layers/resilience.c
     lib/layers/port_hop.c
@@ -118,6 +118,9 @@ add_executable(test_runner
     tests/test_route_table.c
     tests/test_abr.c
     tests/test_path_metrics.c
+    tests/test_kernel_filter.c
+    tests/test_anti_analysis.c
+    tests/test_offensive.c
 )
 
 target_link_libraries(test_runner PRIVATE transport_core)
