@@ -670,8 +670,8 @@ Current implementation: `core/scheduler.c` with ring buffers per priority.
 | `tx` | Transmit packets to NIC | `core/tx_thread.c` — posix/win32 |
 | `crypto` | Encryption / decryption operations | Inline in session_enc (no dedicated thread) |
 | `control` | Session control and state machine | `main.c` — synchronous in event loop |
-| `resilience` | FEC, multipath, reconnect logic | Not yet implemented |
-| `monitor` | Health checks, metrics, watchdog | Not yet implemented |
+| `resilience` | FEC, multipath, reconnect logic | Inline in engine event loop (no dedicated thread) |
+| `monitor` | Health checks, metrics, watchdog | Inline in engine event loop |
 | `audio` | Audio encode/decode pipeline | Not yet implemented |
 | `cli` | CLI command interface | Not yet implemented |
 
@@ -690,12 +690,12 @@ Current implementation: `core/scheduler.c` with ring buffers per priority.
 
 | Feature | Description | Status |
 |---|---|---|
-| `multipath` | Simultaneously use multiple network paths | Planned |
-| `relay` | Route through trusted relay nodes | Planned |
-| `FEC` | Forward Error Correction for packet loss | Planned |
-| `port hop` | Dynamically change UDP port | Planned |
-| `reconnect` | Re-establish transport without session loss | Planned |
-| `adaptive bitrate` | Adjust audio quality to network conditions | Planned |
+| `multipath` | Simultaneously use multiple network paths | ✅ Implemented |
+| `relay` | Route through trusted relay nodes | ✅ Implemented |
+| `FEC` | Forward Error Correction for packet loss | ✅ Implemented |
+| `port hop` | Dynamically change UDP port | ✅ Implemented |
+| `reconnect` | Re-establish transport without session loss | ✅ Implemented |
+| `adaptive bitrate` | Adjust FEC group size based on loss rate | ✅ Implemented |
 
 ### Critical Rule
 
@@ -823,8 +823,8 @@ Channel demux:
 | `bitrate` | Set / query audio bitrate | Not yet implemented |
 | `cover` | Toggle cover traffic generation | Not yet implemented |
 | `rekey` | Trigger manual key rotation | Not yet implemented |
-| `hop` | Trigger port hop | Not yet implemented |
-| `relay` | Set relay node | Not yet implemented |
+| `hop` | Trigger port hop | ✅ Implemented (demo auto-triggers after lock) |
+| `relay` | Set relay node | ✅ Implemented (route table + forwarding in responder) |
 | `quit` | Terminate application | SIGINT handler |
 
 ### Chat Rules
@@ -835,15 +835,19 @@ Channel demux:
 
 ### Current Demo Flow
 
-As implemented in `main.c`:
-1. Both sides initialize on localhost (::1, ports 9001/9002)
+As implemented in `lib/engine/transport_engine.c` (run_demo):
+1. Both sides initialize on localhost (::1, ports 9001/9002, alt 9003/9004)
 2. Initiator builds and sends HELLO
 3. Responder accepts, generates session_id, sends ACCEPT
 4. Initiator generates ML-KEM 768 keypair, sends KEM_INIT (public key)
 5. Responder encapsulates shared secret, derives session keys, sends KEM_RESPONSE (ciphertext)
 6. Initiator decapsulates shared secret, builds IDENTITY_PROOF (HMAC signature)
 7. Responder verifies identity, derives session keys, sends SESSION_LOCKED
-8. Both sides locked: chat messages exchanged with AEAD encryption
+8. Both sides locked: chat messages exchanged with AEAD encryption, FEC loss simulation
+9. Relay: initiator builds CH_ROUTE packet → responder forwards via route table → initiator prints relayed chat
+10. Port hop: initiator sends CTRL_PORT_HOP → responder acks → both switch to port 9005
+11. ABR: loss detected at 0% → FEC disabled
+12. Reconnect: initiator stops heartbeats → path DOWN → reconnect request/ack → session restored
 
 ---
 
@@ -892,22 +896,23 @@ As implemented in `main.c`:
 ## 22. Implementation Status
 
 | Layer | Phase | Status | File |
-|---|---|---|---|
-| Offensive Shell | Future | Stub | `layers/offensive.c` |
-| Anti-Analysis | Future | Stub | `layers/anti_analysis.c` |
-| Static Shell | Phase 1 | ✅ Complete | `layers/static_shell.c` |
-| Kernel Filter | Future | Stub | `layers/kernel_filter_stub.c` |
-| Session Gate | Phase 1 | ✅ Complete | `layers/session_gate.c` |
-| Resilience | Future | Stub | `layers/resilience.c` |
-| Control / Handshake | Phase 2 | ✅ Complete | `handshake/handshake.c`, `main.c` |
-| Session Enc (AEAD) | Phase 3 | ✅ Complete | `layers/session_enc.c`, `crypto/aead.c` |
-| Channel Enc (Binding) | Phase 3 | ✅ Complete | AAD channel binding in `session_enc.c` |
-| Channel Demux | Phase 1 | ✅ Complete | `layers/rx_demux.c` / `layers/channel.c` |
-| CSPRNG | Phase 3 | ✅ Complete | `crypto/kem.c` (`kem_random_bytes`) |
-| Identity (HMAC) | Phase 3 | ✅ Complete | `handshake/handshake.c` |
-| CLI | Future | Not started | — |
-| Key Rotation | Future | Not started | — |
-| Resilience | Future | Not started | — |
+|---|---|---|---|---|
+| Offensive Shell | Phase 5 | Stub | `lib/layers/offensive.c` |
+| Anti-Analysis | Phase 5 | Stub | `lib/layers/anti_analysis.c` |
+| Static Shell | Phase 1 | ✅ Complete | `lib/layers/static_shell.c` |
+| Kernel Filter | Phase 5 | Stub | `lib/layers/kernel_filter_stub.c` |
+| Session Gate | Phase 1 | ✅ Complete | `lib/layers/session_gate.c` |
+| Resilience (layer pipe) | Phase 4 | ✅ Complete | `lib/layers/resilience.c` (pipe passthrough) |
+| Resilience (engine) | Phase 4 | ✅ Complete | `lib/core/resilience_ctx.c`, `lib/engine/heartbeat.c`, `lib/engine/reconnect.c`, `lib/engine/adaptive_bitrate.c` |
+| Relay / Mesh | Phase 4 | ✅ Complete | `lib/relay/relay.c`, `lib/relay/route_table.c` |
+| Control / Handshake | Phase 2 | ✅ Complete | `lib/handshake/handshake.c`, `lib/engine/transport_engine.c` |
+| Session Enc (AEAD) | Phase 3 | ✅ Complete | `lib/layers/session_enc.c`, `lib/crypto/aead.c` |
+| Channel Enc (Binding) | Phase 3 | ✅ Complete | AAD channel binding in `lib/layers/session_enc.c` |
+| Channel Demux | Phase 1 | ✅ Complete | `lib/layers/rx_demux.c` |
+| CSPRNG | Phase 3 | ✅ Complete | `lib/crypto/kem.c` (`kem_random_bytes`) |
+| Identity (HMAC) | Phase 3 | ✅ Complete | `lib/handshake/handshake.c` |
+| CLI | Phase 6 | Not started | — |
+| Key Rotation | Phase 6 | Not started | — |
 
 ### Phase Summary
 
@@ -916,16 +921,24 @@ As implemented in `main.c`:
 | Phase 1 | Core transport, pipeline, layer stack | ✅ Complete |
 | Phase 2 | PQ handshake (ML-KEM 768), state machine, key derivation | ✅ Complete |
 | Phase 3 | AEAD session encryption, CSPRNG, identity verification, channel binding | ✅ Complete |
-| Phase 4 | Resilience (FEC, multipath, reconnect) | 📋 Planned |
+| Phase 4 | Resilience (FEC, multipath, port hop, reconnect, relay, adaptive bitrate) | ✅ Complete |
 | Phase 5 | Outer defense layers (kernel filter, anti-analysis, offensive) | 📋 Planned |
 | Phase 6 | Operational hardening, CLI, key rotation | 📋 Planned |
 
-### Verification Output (Current)
+### Verification Output (Current — Phase 4 Full Demo)
 
 ```
 [HANDSHAKE] identity verified OK
-[INIT CHAT] hey from responder!
-[RESP CHAT] hello from initiator!
+[RELAY] route table: node 2 -> self
+[INITIATOR] session locked, sending test chats
+[FEC LOSS DROP] seq=5 path=0
+[FEC] recovered seq=5 len=53 from parity
+[PORT_HOP] request sent: hop to port 9005
+[PORT_HOP] ack received: hop confirmed
+[RELAY] forwarded seq=11 to node 2 ch=3 (17 bytes)
+[INIT CHAT][P0] hello via relay!
+[ABR] loss=0.0% fec=on group=4 -> off group=0
+[RECONNECT] simulation complete, path restored
 [STATS] init=LOCKED resp=LOCKED pool=4096 attempts=1 ok=1 fail=0 enc=on
 ```
 

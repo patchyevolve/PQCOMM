@@ -110,11 +110,47 @@ The `tag` follows immediately after the ciphertext at offset `24 + length - AEAD
 - Periodic stats line is allowed.
 - Selftest code is compile-time gated (`PHASE1_SELFTEST`).
 
+## Control Opcodes (Phase 4 additions)
+
+The following CONTROL-channel opcodes are used post-handshake:
+
+| Code | Constant | Direction | Payload |
+|---|---|---|---|
+| 1 | `CTRL_HELLO` | Initiator→Responder | opcode(1) |
+| 2 | `CTRL_ACCEPT` | Responder→Initiator | opcode(1) + session_id(8) |
+| 3 | `CTRL_PQ_KEM_INIT` | Initiator→Responder | opcode(1) + public_key(1184) |
+| 4 | `CTRL_PQ_KEM_RESPONSE` | Responder→Initiator | opcode(1) + ciphertext(1088) |
+| 5 | `CTRL_IDENTITY_PROOF` | Initiator→Responder | opcode(1) + signature(64) + identity_hash(32) |
+| 6 | `CTRL_SESSION_LOCKED` | Responder→Initiator | opcode(1) |
+| 7 | `CTRL_HANDSHAKE_ERROR` | Either | opcode(1) + error_code(1) |
+| 8 | `CTRL_PORT_HOP` | Either | opcode(1) + new_port(2) + session_id(8) |
+| 9 | `CTRL_PORT_HOP_ACK` | Either | opcode(1) + session_id(8) |
+| 10 | `CTRL_HEARTBEAT` | Either | opcode(1) |
+| 11 | `CTRL_HEARTBEAT_ACK` | Either | opcode(1) |
+| 12 | `CTRL_RECONNECT` | Either | opcode(1) + session_id(8) |
+| 13 | `CTRL_RECONNECT_ACK` | Either | opcode(1) + session_id(8) |
+| 14 | `CTRL_ROUTE_DATA` | Either | opcode(1) + dest_node_id(8) + inner_channel(1) + inner_payload(N) |
+
+## FEC Parity Packet Wire Format
+
+FEC parity is sent on the CONTROL channel when a data-packet group completes:
+
+```
+Offset  Size  Field
+0       4     group_start_seq    Sequence number of first packet in group (little-endian)
+4       1     group_size         Number of packets in group (typically 4 or 8)
+5       1     channel_id         Channel this group belongs to (e.g. 3 for CHAT)
+6       N     xor_parity         XOR of all payloads in group (length = max payload in group)
+```
+
+Total parity packet payload: 6 + N bytes (N ≤ 1400).
+The receiver calls `fec_rx_store_parity` to store this, then `fec_rx_rebuild` to recover missing packets.
+
 ## Addressed in Later Phases
 
 | Feature | Phase | Doc Reference |
 |---|---|---|
-| Resilience (multipath/FEC/hop/relay) | Phase 4 | Spec §16 |
+| Resilience (multipath/FEC/hop/relay/reconnect/abr) | Phase 4 | Spec §16 |
 | Kernel filter (BPF/eBPF) | Phase 5 | Spec §6 |
 | Anti-analysis layer | Phase 5 | Spec §9 |
 | Offensive shell | Phase 5 | Spec §10 |

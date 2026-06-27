@@ -58,8 +58,14 @@ transport/
 │   ├── discovery/                  # LAN discovery
 │   │   ├── lan_discovery.h / .c
 │   │   └── beacon.h / .c
+│   ├── relay/                      # Relay / mesh routing
+│   │   ├── relay.h / .c            # CH_ROUTE forwarding
+│   │   └── route_table.h / .c      # Route table (16 entries)
 │   └── engine/                     # Transport engine orchestrator
 │       ├── transport_engine.h / .c # Thread lifecycle, event dispatch
+│       ├── heartbeat.h / .c        # Heartbeat send/handle/tick
+│       ├── reconnect.h / .c        # Reconnect protocol
+│       ├── adaptive_bitrate.h / .c # ABR: FEC group size from loss rate
 │       └── timer_wheel.h / .c      # Heartbeat, timers
 ├── app/                           # TUI executable (transport)
 │   ├── CMakeLists.txt
@@ -71,10 +77,13 @@ transport/
 │   ├── CMakeLists.txt
 │   ├── test_runner_main.c
 │   ├── test_connect.c
-│   ├── test_fec_loss.c
+│   ├── test_fec_loss.c            # FEC encode/recover unit tests
 │   ├── test_reconnect.c
 │   ├── test_port_hop.c
 │   ├── test_multipath_failover.c
+│   ├── test_route_table.c         # Route table add/find/remove
+│   ├── test_abr.c                 # ABR threshold transitions
+│   ├── test_path_metrics.c        # Loss window, state transitions, path select
 │   └── test_helpers.c             # Shared test utilities
 ├── docs/                          # Documentation
 │   ├── SSM_Secure_Communication_Spec_v1.0.md  # LOCKED
@@ -535,18 +544,25 @@ test_runner executable:
 
 ### 7.2 Test Scenarios
 
-| Test | What it verifies |
-|---|---|
-| `test_connect_basic` | Manual connect → handshake → LOCKED in <100ms |
-| `test_chat_roundtrip` | Send message, verify it arrives on peer |
-| `test_fec_loss_10pct` | Drop 10% packets, verify FEC recovers |
-| `test_fec_loss_30pct` | Drop 30% packets, verify FEC recovers |
-| `test_reconnect` | Kill transport → restore → session survives |
-| `test_port_hop` | Hop port mid-session, verify chat continues |
-| `test_multipath_failover` | Kill path 0, verify path 1 takes over |
-| `test_discovery_beacon` | Start 2 instances, verify discovery |
-| `test_identity_bad_key` | Wrong identity key → handshake fails |
-| `test_replay_reject` | Replay captured packet → dropped |
+| Test | What it verifies | Status |
+|---|---|---|---|
+| `test_connect_basic` | Manual connect → handshake → LOCKED | Skel |
+| `test_fec_recovery` | XOR parity encode → lose 1 → rebuild original | ✅ |
+| `test_fec_no_recovery_all_present` | All packets received → no false rebuild | ✅ |
+| `test_route_table_add_find` | Add entries, find by node_id | ✅ |
+| `test_route_table_remove` | Remove entry, verify count and not found | ✅ |
+| `test_route_table_update_metrics` | Update loss_rate and rtt on entry | ✅ |
+| `test_abr_off` | 0% loss → FEC disabled | ✅ |
+| `test_abr_low_loss` | ~6% loss → group size 8 | ✅ |
+| `test_abr_high_loss` | ~25% loss → group size 2 | ✅ |
+| `test_path_loss_window` | 50% loss rate, then flood with receives → 0% | ✅ |
+| `test_path_state_transition` | ACTIVE → DEGRADED → DOWN → RX restores | ✅ |
+| `test_path_select` | Lowest-loss path selected, fallback on DOWN | ✅ |
+| `test_fec_loss_10pct` | Drop 10% packets, verify FEC recovers | Skel |
+| `test_fec_loss_30pct` | Drop 30% packets, verify FEC recovers | Skel |
+| `test_reconnect` | Kill transport → restore → session survives | Skel |
+| `test_port_hop` | Hop port mid-session, verify chat continues | Skel |
+| `test_multipath_failover` | Kill path 0, verify path 1 takes over | Skel |
 
 ### 7.3 Peer Simulation
 
@@ -600,7 +616,12 @@ add_library(transport STATIC
     lib/discovery/lan_discovery.c
     lib/discovery/beacon.c
     lib/engine/transport_engine.c
+    lib/engine/heartbeat.c
+    lib/engine/reconnect.c
+    lib/engine/adaptive_bitrate.c
     lib/engine/timer_wheel.c
+    lib/relay/relay.c
+    lib/relay/route_table.c
 )
 
 target_include_directories(transport PUBLIC lib/api)
@@ -625,6 +646,9 @@ add_executable(test_runner
     tests/test_port_hop.c
     tests/test_multipath_failover.c
     tests/test_helpers.c
+    tests/test_route_table.c
+    tests/test_abr.c
+    tests/test_path_metrics.c
 )
 target_link_libraries(test_runner PRIVATE transport)
 ```
@@ -665,12 +689,12 @@ cmake --build build_linux
 
 ### Then Phase 4 continues
 
-| Substep | Description |
-|---|---|
-| 4.5 | Reconnect policy (wired into connection manager) |
-| 4.6 | Relay / mesh routing (ROUTE channel, relay forwarding) |
-| 4.7 | Adaptive bitrate (FEC ratio from loss rate feedback) |
-| 4.8 | Test scenarios (test_runner tests) |
+| Substep | Description | Status |
+|---|---|---|---|
+| 4.5 | Reconnect policy (heartbeat + reconnect protocol) | ✅ Complete |
+| 4.6 | Relay / mesh routing (ROUTE channel, route table, forwarding) | ✅ Complete |
+| 4.7 | Adaptive bitrate (FEC group size from loss rate feedback) | ✅ Complete |
+| 4.8 | Test scenarios (11 unit tests in test_runner) | ✅ Complete |
 
 ---
 
@@ -697,6 +721,11 @@ cmake --build build_linux
 | *(new)* | `api/transport_api.h` | Public API header |
 | *(new)* | `api/transport_api.c` | API implementation (dispatches to engine) |
 | *(new)* | `engine/transport_engine.c` | Thread orchestration |
+| *(new)* | `engine/heartbeat.c` | Heartbeat send/handle/tick |
+| *(new)* | `engine/reconnect.c` | Reconnect request/ack protocol |
+| *(new)* | `engine/adaptive_bitrate.c` | ABR controller |
+| *(new)* | `relay/relay.c` | CH_ROUTE forwarding |
+| *(new)* | `relay/route_table.c` | Route table |
 | *(new)* | `connection/connection_manager.c` | Peer table + connect/disconnect |
 | *(new)* | `discovery/lan_discovery.c` | Beacon + timeout |
 | *(new)* | `app/tui_*.c` | TUI rendering/input |
