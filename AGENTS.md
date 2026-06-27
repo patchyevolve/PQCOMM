@@ -29,6 +29,7 @@
 - FEC: XOR parity TX/RX, group-based recovery (group size 4)
 - Multipath: 2 UDP socket pairs, per-path seq tracking, path selection
 - Port hop: CTRL_PORT_HOP (8) / CTRL_PORT_HOP_ACK (9) opcodes, request/ack protocol
+- Relay: route table with add/find/remove, CTRL_ROUTE_DATA (14) opcode, CH_ROUTE channel forwarding
 
 ### Key Decisions
 - **Ed25519**: PSA Ed25519 unavailable in mbedtls 3.6.6 → HMAC-SHA256 identity instead
@@ -50,7 +51,7 @@
 | **Phase 1** | Core transport, parsing, static shell, session gate, replay, scheduler, pipeline | ✅ Complete |
 | **Phase 2** | PQ handshake (ML-KEM 768), state machine, HKDF derivation, handshake stats | ✅ Complete |
 | **Phase 3** | AEAD encryption, CSPRNG, HMAC identity, channel binding | ✅ Complete |
-| **Phase 4** | Resilience: FEC, multipath, reconnect, port hop, adaptive bitrate | ⏳ In Progress (1-5 done) |
+| **Phase 4** | Resilience: FEC, multipath, reconnect, port hop, adaptive bitrate | ⏳ In Progress (1-6 done) |
 | **Phase 4.5** | Architecture restructure: libtransport_core.a + transport + test_runner | ✅ Complete |
 | **Phase 5** | Outer defense: kernel BPF, anti-analysis, offensive shell | 📋 Planned |
 | **Phase 6** | CLI, key rotation, audio pipeline, secure storage, crypto thread | 📋 Planned |
@@ -71,6 +72,7 @@ Every time before committing:
    - `[FEC] recovered seq=5` shown (both sides)
    - `[PORT_HOP]` request/ack exchange shown
    - `[RECONNECT] ack received, session re-established` shown
+   - `[RELAY] forwarded seq=...` and `[INIT CHAT] hello via relay!` shown
 3. **Regressions**: `fail=0` and `enc=on` in stats
 4. **Docs**: Update `IMPLEMENTATION_PHASE_STATUS.md`, `ARCHITECTURE.md`, and `PHASE1_WIRE_CONTRACT.md` if wire format or status changes
 5. **Rules**: No violation of RULE-8 (malloc) or RULE-9 (logging) in pipeline / fast-path code

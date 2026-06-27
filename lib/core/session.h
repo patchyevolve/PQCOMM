@@ -28,6 +28,7 @@
 #define CTRL_HEARTBEAT_ACK      11
 #define CTRL_RECONNECT          12
 #define CTRL_RECONNECT_ACK      13
+#define CTRL_ROUTE_DATA         14
 
 #define HS_ERR_NONE             0
 #define HS_ERR_UNSUPPORTED_KEM  1

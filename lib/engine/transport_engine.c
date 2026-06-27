@@ -35,6 +35,8 @@
 #include "port_hop.h"
 #include "heartbeat.h"
 #include "reconnect.h"
+#include "route_table.h"
+#include "relay.h"
 
 static volatile int g_running = 1;
 
@@ -64,6 +66,8 @@ static tx_queues_t g_queues_responder1;
 
 static int g_initiator_locked = 0;
 static int g_responder_locked = 0;
+static route_table_t g_route_table;
+static int g_initiator_route_sent = 0;
 
 static void sighandler(int sig)
 {
@@ -249,6 +253,18 @@ void control_handler_initiator(packet_buf_t* p, void* ctx_ptr)
             }
         }
 
+        if (!g_initiator_route_sent) {
+            g_initiator_route_sent = 1;
+            packet_buf_t* route_pkt = NULL;
+            if (relay_build_test_packet(sess, ctx->seq_counter, RELAY_NODE_RESPONDER,
+                                        "hello via relay!", &route_pkt) == 0) {
+                memcpy(route_pkt->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
+                route_pkt->addr_len = sizeof(g_initiator_peer_addr);
+                ring_push(&ctx->txq->chat, route_pkt);
+                printf("[RELAY] sent route test to responder\n");
+            }
+        }
+
         uint16_t new_port = sess->local_port + 4;
         port_hop_send_request(sess, ctx->txq, &g_initiator_peer_addr, new_port, ctx->seq_counter);
     }
@@ -266,7 +282,16 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
     }
 
     if (view.channel_id != 1) {
-        if (sess->state == 6)
+        if (view.channel_id == CH_ROUTE && sess->state == 6) {
+            int ret = relay_forward_route(p, &view, sess, &g_route_table,
+                                          ctx->seq_counter,
+                                          ctx->txq, &g_responder_peer_addr);
+            if (ret == 0)
+                printf("[RESP] unknown route packet\n");
+            pool_return(p);
+            return;
+        }
+        if (sess->state == 6 && view.channel_id == CH_CHAT)
             printf("[RESP CHAT][P%u] %s\n", view.path_idx, (const char*)view.payload);
         pool_return(p);
         return;
@@ -306,6 +331,10 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
 
     if (sess->state == 6 && !g_responder_locked) {
         g_responder_locked = 1;
+        route_table_init(&g_route_table);
+        route_table_add(&g_route_table, RELAY_NODE_RESPONDER, sess->session_id,
+                       &g_responder_peer_addr, sizeof(g_responder_peer_addr));
+        printf("[RELAY] route table: node %lu -> self\n", (unsigned long)RELAY_NODE_RESPONDER);
         printf("[RESPONDER] session locked, sending test chats\n");
 
         tx_queues_t* txqs[2] = { ctx->txq, &g_queues_responder1 };
@@ -375,6 +404,7 @@ int transport_engine_run_demo(void)
     uint32_t loop_ticks = 0;
 
     pool_init();
+    route_table_init(&g_route_table);
 
     signal(SIGINT, sighandler);
     signal(SIGTERM, sighandler);

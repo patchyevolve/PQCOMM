@@ -46,6 +46,8 @@ set(LIB_SRC
     lib/crypto/hkdf.c
     lib/crypto/aead.c
     lib/handshake/handshake.c
+    lib/relay/route_table.c
+    lib/relay/relay.c
 )
 
 if (WIN32)
@@ -85,6 +87,7 @@ target_include_directories(transport_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/engine>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/connection>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/discovery>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/relay>
 )
 
 # ============================================================

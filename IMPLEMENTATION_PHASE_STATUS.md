@@ -115,6 +115,16 @@ These are wired in pipeline order and currently return pass.
 - Max 3 reconnect attempts, then drop to SESSION_IDLE.
 - Demo verified: port hop + simulated transport loss → heartbeat timeout → reconnect → session re-established.
 
+### 1.13 Relay / Mesh Routing (Phase 4 substep 6)
+
+- Route table: up to 16 entries, each with node_id, session_id, addr, loss_rate, RTT.
+- Route commands: route_table_add/remove/find/update_metrics.
+- CH_ROUTE channel (channel 5): encrypted relay data channel using channel key 4.
+- CTRL_ROUTE_DATA (14) opcode: wraps destination node_id (8 bytes), inner channel ID (1 byte), and payload.
+- relay_forward_route: decrypts incoming CH_ROUTE via pipeline, extracts dest, looks up route table, builds+encrypts inner channel packet, sends.
+- relay_build_test_packet: builds encrypted CH_ROUTE test packet with given message and dest node.
+- Demo verified: initiator sends "hello via relay!" → responder receives CH_ROUTE → route table lookup → forwarded as CH_CHAT → initiator prints the relayed message.
+
 ---
 
 ## 2) Partially Implemented / Needs Hardening
@@ -143,7 +153,6 @@ These are wired in pipeline order and currently return pass.
 
 ## 3) Not Yet Implemented (Major Missing Capabilities)
 
-- Relay / mesh routing (Phase 4 substep 6)
 - Adaptive bitrate (Phase 4 substep 7)
 - Test scenarios / test_runner (Phase 4 substep 8)
 - ASCII TUI (connection screen, chat window, status panel) — Phase 4.5/6
@@ -307,7 +316,16 @@ Goal: sustain communication quality under loss/jitter/path instability.
    - Peer address update via session_register_path
    - Demo: hop to local_port + 4 after chat messages
 
-5. **Reconnect policy** — ✅ COMPLETE
+5. **Reconnect policy** — ✅ COMPLETE (see Section 1.12)
+
+6. **Relay / mesh routing** — ✅ COMPLETE
+    - Route table: node_id → {session_id, addr, metrics}, up to 16 entries
+    - CH_ROUTE (channel 5) for relay data: CTRL_ROUTE_DATA (14) opcode wraps dest_node_id + inner_channel + payload
+    - relay_forward_route: decrypt incoming CH_ROUTE, extract dest, route table lookup, encrypt + send as inner channel
+    - relay_build_test_packet: build encrypted CH_ROUTE test packet
+    - Demo: initiator sends "hello via relay!" → responder relays via route table → forwarded as CHAT → printed on initiator
+    - Route selection via route_table_find (first-match by node_id)
+    - Route metrics updated via route_table_update_metrics (EWMA smoothing, RTT + loss rate)
     - Detect transport loss via heartbeat timeout (ACTIVE → DEGRADED → DOWN)
     - CTRL_HEARTBEAT (10) / CTRL_HEARTBEAT_ACK (11) opcodes for path health
     - CTRL_RECONNECT (12) / CTRL_RECONNECT_ACK (13) opcodes for reconnect
