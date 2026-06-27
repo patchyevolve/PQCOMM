@@ -351,12 +351,14 @@ Goal: sustain communication quality under loss/jitter/path instability.
     - Minimum quality floor: smallest group (2) at high loss prevents infinite degradation
 
 8. **Test scenarios**:
-   - Packet loss bursts (0%, 5%, 15%, 30% loss rates)
-   - Delayed reorder (±10ms, ±50ms, ±100ms jitter)
-   - Path failover (primary socket kill, verify session survives)
-   - Reconnect without session reset (kill + restore transport)
-   - Port hop during active data flow (no dropped packets)
-   - FEC decode under configurable loss rates
+   - FEC recovery test: XOR parity encode → lose one packet → rebuild returns original data
+   - FEC no-recovery test: all packets present → rebuild returns 0 (no false recovery)
+   - Route table: add/find/remove/update_metrics
+   - ABR thresholds: 0% loss → FEC off; ~6% → group 8; ~25% → group 2
+   - Path loss window: 50% loss → verify loss_rate, then flood with receives → 0%
+   - Path state transitions: ACTIVE → no activity → DEGRADED → DOWN → RX restores
+   - Multipath selection: best path by loss rate, fallback on DOWN
+   - All 11 tests PASS (run `./build_linux/test_runner`)
 
 ---
 

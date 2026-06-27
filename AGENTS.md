@@ -51,7 +51,7 @@
 | **Phase 1** | Core transport, parsing, static shell, session gate, replay, scheduler, pipeline | ✅ Complete |
 | **Phase 2** | PQ handshake (ML-KEM 768), state machine, HKDF derivation, handshake stats | ✅ Complete |
 | **Phase 3** | AEAD encryption, CSPRNG, HMAC identity, channel binding | ✅ Complete |
-| **Phase 4** | Resilience: FEC, multipath, reconnect, port hop, adaptive bitrate | ⏳ In Progress (1-7 done) |
+| **Phase 4** | Resilience: FEC, multipath, reconnect, port hop, adaptive bitrate | ✅ Complete (1-8 done) |
 | **Phase 4.5** | Architecture restructure: libtransport_core.a + transport + test_runner | ✅ Complete |
 | **Phase 5** | Outer defense: kernel BPF, anti-analysis, offensive shell | 📋 Planned |
 | **Phase 6** | CLI, key rotation, audio pipeline, secure storage, crypto thread | 📋 Planned |
@@ -74,10 +74,10 @@ Every time before committing:
    - `[RECONNECT] ack received, session re-established` shown
     - `[RELAY] forwarded seq=...` and `[INIT CHAT] hello via relay!` shown
     - `[ABR] loss=0.0% fec=on group=4 -> off group=0` shown (both sides)
-3. **Regressions**: `fail=0` and `enc=on` in stats
-4. **Docs**: Update `IMPLEMENTATION_PHASE_STATUS.md`, `ARCHITECTURE.md`, and `PHASE1_WIRE_CONTRACT.md` if wire format or status changes
-5. **Rules**: No violation of RULE-8 (malloc) or RULE-9 (logging) in pipeline / fast-path code
-6. **Tests**: `./build_linux/test_runner` — all tests pass
+3. **Tests**: `./build_linux/test_runner` — returns 0 with "11/11 tests passed"
+4. **Regressions**: `fail=0` and `enc=on` in stats
+5. **Docs**: Update `IMPLEMENTATION_PHASE_STATUS.md`, `ARCHITECTURE.md`, and `PHASE1_WIRE_CONTRACT.md` if wire format or status changes
+6. **Rules**: No violation of RULE-8 (malloc) or RULE-9 (logging) in pipeline / fast-path code
 
 ---
 

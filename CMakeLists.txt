@@ -115,6 +115,9 @@ add_executable(test_runner
     tests/test_port_hop.c
     tests/test_multipath_failover.c
     tests/test_helpers.c
+    tests/test_route_table.c
+    tests/test_abr.c
+    tests/test_path_metrics.c
 )
 
 target_link_libraries(test_runner PRIVATE transport_core)
