@@ -124,12 +124,13 @@ static const uint8_t LABEL_CHANNEL1[] = "SCv1 channel key 1";
 static const uint8_t LABEL_CHANNEL2[] = "SCv1 channel key 2";
 static const uint8_t LABEL_CHANNEL3[] = "SCv1 channel key 3";
 static const uint8_t LABEL_CHANNEL4[] = "SCv1 channel key 4";
+static const uint8_t LABEL_CHANNEL5[] = "SCv1 channel key 5";
 
 /* derives one session key + 5 channel keys from kem shared secret + transcript */
 int derive_session_keys(const uint8_t *kem_secret, uint32_t secret_len,
                         const uint8_t *transcript_hash, uint32_t hash_len,
                         uint8_t *session_key, uint32_t sk_len,
-                        uint8_t channel_keys[5][32])
+                         uint8_t channel_keys[6][32])
 {
     if (!kem_secret || !transcript_hash || !session_key || !channel_keys)
         return -1;
@@ -150,15 +151,16 @@ int derive_session_keys(const uint8_t *kem_secret, uint32_t secret_len,
     static const struct {
         const uint8_t *label;
         uint32_t len;
-    } labels[5] = {
+    } labels[6] = {
         { LABEL_CHANNEL0, sizeof(LABEL_CHANNEL0) - 1 },
         { LABEL_CHANNEL1, sizeof(LABEL_CHANNEL1) - 1 },
         { LABEL_CHANNEL2, sizeof(LABEL_CHANNEL2) - 1 },
         { LABEL_CHANNEL3, sizeof(LABEL_CHANNEL3) - 1 },
         { LABEL_CHANNEL4, sizeof(LABEL_CHANNEL4) - 1 },
+        { LABEL_CHANNEL5, sizeof(LABEL_CHANNEL5) - 1 },
     };
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if (hkdf_expand(prk, HKDF_HASH_SIZE,
                         labels[i].label, labels[i].len,
                         channel_keys[i], 32) != 0)
@@ -171,6 +173,6 @@ int derive_session_keys(const uint8_t *kem_secret, uint32_t secret_len,
 fail:
     secure_wipe(prk, sizeof prk);
     secure_wipe(session_key, sk_len);
-    secure_wipe(channel_keys, 5 * 32);
+    secure_wipe(channel_keys, 6 * 32);
     return -1;
 }

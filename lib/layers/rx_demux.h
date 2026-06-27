@@ -9,6 +9,7 @@ typedef struct
     spsc_ring_t audio;
     spsc_ring_t chat;
     spsc_ring_t file;
+    spsc_ring_t video;
     spsc_ring_t route;
 } rx_queues_t;
 
