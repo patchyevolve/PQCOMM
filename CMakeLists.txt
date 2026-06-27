@@ -17,6 +17,10 @@ set(LIB_SRC
     lib/engine/transport_engine.c
     lib/engine/heartbeat.c
     lib/engine/reconnect.c
+    lib/engine/rekey.c
+    lib/engine/crypto_worker.c
+    lib/engine/audio_pipeline.c
+    lib/engine/monitor.c
     lib/engine/adaptive_bitrate.c
     lib/connection/connection_manager.c
     lib/discovery/lan_discovery.c
@@ -38,17 +42,26 @@ set(LIB_SRC
     lib/layers/resilience.c
     lib/layers/port_hop.c
     lib/layers/session_enc.c
-    lib/layers/channel_enc.c
     lib/layers/seq_check.c
     lib/layers/rx_demux.c
     lib/pipeline/pipeline_inbound.c
+    lib/pipeline/pipeline_outbound.c
     lib/pipeline/pipeline_selftest.c
     lib/crypto/kem.c
     lib/crypto/hkdf.c
     lib/crypto/aead.c
+    lib/crypto/secure_store.c
+    lib/crypto/toml_config.c
     lib/handshake/handshake.c
     lib/relay/route_table.c
     lib/relay/relay.c
+    lib/identity/identity.c
+    lib/engine/conn_request.c
+    lib/engine/audio_capture.c
+    lib/engine/audio_worker.c
+    lib/engine/video_capture.c
+    lib/engine/video_worker.c
+    lib/engine/file_transfer.c
 )
 
 if (WIN32)
@@ -69,11 +82,15 @@ if (NOT WIN32)
     find_package(Threads REQUIRED)
 endif()
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(OPUS REQUIRED opus)
+
 target_link_libraries(transport_core PUBLIC
     MbedTLS::mbedtls
     MbedTLS::mbedcrypto
     MbedTLS::mbedx509
     OQS::oqs
+    ${OPUS_LIBRARIES}
     $<$<BOOL:${WIN32}>:ws2_32>
     $<$<NOT:$<BOOL:${WIN32}>>:Threads::Threads>
 )
@@ -89,18 +106,26 @@ target_include_directories(transport_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/connection>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/discovery>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/relay>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/identity>
+    ${OPUS_INCLUDE_DIRS}
 )
 
 # ============================================================
 # transport — TUI executable
 # ============================================================
 
-add_executable(transport app/main.c)
+add_executable(transport
+    app/main.c
+    app/tui_screen.c
+    app/tui_input.c
+    app/tui_panels.c
+)
 
 target_link_libraries(transport PRIVATE transport_core)
 
 target_include_directories(transport PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/crypto
 )
 
 # ============================================================
@@ -121,9 +146,11 @@ add_executable(test_runner
     tests/test_kernel_filter.c
     tests/test_anti_analysis.c
     tests/test_offensive.c
+    tests/test_audio.c
+    tests/test_jitter.c
 )
 
-target_link_libraries(test_runner PRIVATE transport_core)
+target_link_libraries(test_runner PRIVATE transport_core m)
 
 target_include_directories(test_runner PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/tests

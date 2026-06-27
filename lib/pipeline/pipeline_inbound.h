@@ -16,7 +16,6 @@ typedef enum
     PIPELINE_DROP_SESSION,
     PIPELINE_DROP_RESILIENCE,
     PIPELINE_DROP_SESSION_ENC,
-    PIPELINE_DROP_CHANNEL_ENC,
     PIPELINE_DROP_SEQ,
     PIPELINE_DROP_CHANNEL,
     PIPELINE_DROP_DEMUX
@@ -27,9 +26,20 @@ typedef struct {
     session_t* sess;
     rx_queues_t* rxq;
     packet_buf_t* recovered;
+    packet_view_t view;
 } pipeline_ctx_t;
 
 pipeline_result_t pipeline_inbound_process(
+    packet_buf_t* p,
+    pipeline_ctx_t* ctx
+);
+
+pipeline_result_t pipeline_inbound_pre_crypto(
+    packet_buf_t* p,
+    pipeline_ctx_t* ctx
+);
+
+pipeline_result_t pipeline_inbound_post_crypto(
     packet_buf_t* p,
     pipeline_ctx_t* ctx
 );

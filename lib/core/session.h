@@ -29,6 +29,23 @@
 #define CTRL_RECONNECT          12
 #define CTRL_RECONNECT_ACK      13
 #define CTRL_ROUTE_DATA         14
+#define CTRL_REKEY_INIT         15
+#define CTRL_REKEY_CONFIRM      16
+#define CTRL_CONNECT_REQUEST    17
+#define CTRL_CONNECT_ACCEPT     18
+#define CTRL_CONNECT_DECLINE    19
+#define CTRL_AUDIO_CALL         20
+#define CTRL_AUDIO_CALL_ACK     21
+#define CTRL_AUDIO_CALL_END     22
+#define CTRL_VIDEO_CALL         23
+#define CTRL_VIDEO_CALL_ACK     24
+#define CTRL_VIDEO_CALL_END     25
+#define CTRL_FILE_META          26
+#define CTRL_FILE_CHUNK         27
+#define CTRL_FILE_ACK           28
+#define CTRL_TYPING             29
+#define CTRL_DELIVERY_ACK       30
+#define CTRL_READ_ACK           31
 
 #define HS_ERR_NONE             0
 #define HS_ERR_UNSUPPORTED_KEM  1
@@ -73,7 +90,7 @@ typedef struct {
 
 typedef struct {
     uint8_t session_key[32];
-    uint8_t channel_keys[5][32];
+    uint8_t channel_keys[6][32];
     uint64_t key_epoch;
 } session_keys_t;
 

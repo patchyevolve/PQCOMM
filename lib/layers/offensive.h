@@ -1,6 +1,8 @@
 #pragma once
 #include "packet_view.h"
+#include "packet.h"
 #include <stdint.h>
+#include <netinet/in.h>
 
 #define OFF_MAX_SOURCES 256
 #define OFF_THRESHOLD 100
@@ -25,3 +27,5 @@ extern offensive_t g_offensive;
 
 void offensive_init(void);
 int offensive_check(packet_view_t* p);
+packet_buf_t* offensive_build_decoy(const struct sockaddr_in6* target);
+void offensive_tick(uint64_t now_ms);

@@ -14,17 +14,26 @@ int session_check(session_t* s, packet_view_t* p)
         return -1;
 
     if (p->channel_id == CH_CONTROL) {
-        if (s->role == ROLE_RESPONDER &&
-            s->state == SESSION_HANDSHAKE_START &&
-            p->payload[0] == CTRL_HELLO)
-            return 0;
-        if (s->role == ROLE_INITIATOR &&
-            s->state == SESSION_HANDSHAKE_START &&
-            p->payload[0] != CTRL_HELLO)
-            return 0;
         if (s->state == SESSION_LOCKED)
             return 0;
-        return 0;
+        /* responder: accept HELLO in IDLE (not yet initialized) or HANDSHAKE_START */
+        if (s->role == ROLE_RESPONDER &&
+            (s->state == SESSION_IDLE || s->state == SESSION_HANDSHAKE_START)) {
+            if (p->payload[0] == CTRL_HELLO) return 0;
+            if (p->payload[0] == CTRL_PQ_KEM_INIT) return 0;
+            return -1;
+        }
+        if (s->role == ROLE_INITIATOR) {
+            if (s->state == SESSION_HANDSHAKE_START && p->payload[0] == CTRL_ACCEPT) return 0;
+            if (s->state == SESSION_PQ_KEM_INIT_SENT && p->payload[0] == CTRL_PQ_KEM_RESPONSE) return 0;
+            if (s->state == SESSION_PQ_KEM_RESPONSE_SENT && p->payload[0] == CTRL_IDENTITY_PROOF) return 0;
+            if (s->state == SESSION_IDENTITY_PROOF_SENT && p->payload[0] == CTRL_SESSION_LOCKED) return 0;
+        }
+        if (s->role == ROLE_RESPONDER) {
+            if (s->state == SESSION_PQ_KEM_RESPONSE_SENT && p->payload[0] == CTRL_IDENTITY_PROOF) return 0;
+            if (s->state == SESSION_IDENTITY_PROOF_SENT && p->payload[0] == CTRL_SESSION_LOCKED) return 0;
+        }
+        return -1;
     }
 
     if (s->state != SESSION_LOCKED)

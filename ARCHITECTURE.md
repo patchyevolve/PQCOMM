@@ -1,8 +1,9 @@
 # Transport Architecture — Full System Design
 
-## Status: DESIGN DOCUMENT (pre-refactor target)
+## Status: TARGET DESIGN (aspirational — not all items exist yet)
 
-This document defines the target architecture for the refactored project.
+This document defines the target architecture. Files listed here may not yet exist.
+See `IMPLEMENTATION_PHASE_STATUS.md` §Audit for current stub/phantom inventory.
 All implementation work must conform to this design.
 
 ---
@@ -26,7 +27,7 @@ transport/
 │   │   ├── rx_thread.c             # UDP receive thread
 │   │   ├── tx_thread.c             # UDP send thread
 │   │   ├── scheduler.c             # Priority TX queues
-│   │   ├── ring.c / .h             # SPSC lock-free ring
+│   │   ├── ring.h                  # SPSC lock-free ring (ring.c not in CMakeLists)
 │   │   └── resilience_ctx.c / .h   # Path metrics, FEC state
 │   ├── crypto/
 │   │   ├── kem.c                   # ML-KEM 768 wrappers
@@ -37,27 +38,26 @@ transport/
 │   │   └── handshake.c             # Full 6-message handshake
 │   ├── pipeline/
 │   │   ├── pipeline_inbound.c      # 10-layer inbound chain
-│   │   ├── pipeline_outbound.c     # Outbound processing
+│   │   ├── pipeline_outbound.c     # ❌ Outbound processing (not yet implemented)
 │   │   └── pipeline_selftest.c     # Phase 1 selftests
 │   ├── layers/
 │   │   ├── packet_parse.c          # Single-pass parser
 │   │   ├── static_shell.c          # Magic/version/flags
 │   │   ├── session_gate.c          # Session ID check
-│   │   ├── session_enc.c           # AEAD encrypt/decrypt
-│   │   ├── channel_enc.c           # Channel binding
+│   │   ├── session_enc.c           # AEAD encrypt/decrypt + channel key AAD binding
 │   │   ├── seq_check.c             # Replay window
 │   │   ├── rx_demux.c              # Channel dispatch
 │   │   ├── resilience.c            # FEC + multipath layer
 │   │   ├── port_hop.c              # Port hop control
-│   │   ├── offensive.c             # Stub
-│   │   ├── anti_analysis.c         # Stub
-│   │   └── kernel_filter_stub.c    # Stub
+│   │   ├── offensive.c             # Implemented (Phase 5) — decoy/noise is Phase 6
+│   │   ├── anti_analysis.c         # Implemented (Phase 5)
+│   │   └── kernel_filter.c         # Implemented (Phase 5, replaced kernel_filter_stub.c)
 │   ├── connection/                 # Connection manager
 │   │   ├── connection_manager.h / .c
-│   │   └── peer_table.h / .c
+│   │   └── peer_table.h / .c       # ❌ Does not exist
 │   ├── discovery/                  # LAN discovery
 │   │   ├── lan_discovery.h / .c
-│   │   └── beacon.h / .c
+│   │   └── beacon.h / .c           # ❌ Does not exist
 │   ├── relay/                      # Relay / mesh routing
 │   │   ├── relay.h / .c            # CH_ROUTE forwarding
 │   │   └── route_table.h / .c      # Route table (16 entries)
@@ -66,13 +66,13 @@ transport/
 │       ├── heartbeat.h / .c        # Heartbeat send/handle/tick
 │       ├── reconnect.h / .c        # Reconnect protocol
 │       ├── adaptive_bitrate.h / .c # ABR: FEC group size from loss rate
-│       └── timer_wheel.h / .c      # Heartbeat, timers
+│       └── timer_wheel.h / .c      # ❌ Does not exist (heartbeat uses direct tick)
 ├── app/                           # TUI executable (transport)
 │   ├── CMakeLists.txt
-│   ├── main.c
-│   ├── tui_screen.c               # Terminal rendering
-│   ├── tui_input.c                # Keyboard input
-│   └── tui_panels.c              # Connection / Chat / Status panels
+│   ├── main.c                     # Demo entry point (calls transport_engine_run_demo)
+│   ├── tui_screen.c               # ❌ Does not exist
+│   ├── tui_input.c                # ❌ Does not exist
+│   └── tui_panels.c              # ❌ Does not exist
 ├── tests/                         # Test runner executable
 │   ├── CMakeLists.txt
 │   ├── test_runner_main.c
@@ -84,7 +84,7 @@ transport/
 │   ├── test_route_table.c         # Route table add/find/remove
 │   ├── test_abr.c                 # ABR threshold transitions
 │   ├── test_path_metrics.c        # Loss window, state transitions, path select
-│   └── test_helpers.c             # Shared test utilities
+│   └── test_helpers.c             # ❌ Empty stub
 ├── docs/                          # Documentation
 │   ├── SSM_Secure_Communication_Spec_v1.0.md  # LOCKED
 │   ├── PHASE1_WIRE_CONTRACT.md
@@ -597,24 +597,21 @@ add_library(transport STATIC
     lib/crypto/aead.c
     lib/handshake/handshake.c
     lib/pipeline/pipeline_inbound.c
-    lib/pipeline/pipeline_outbound.c
+    # lib/pipeline/pipeline_outbound.c  # ❌ Not yet implemented
     lib/pipeline/pipeline_selftest.c
     lib/layers/packet_parse.c
     lib/layers/offensive.c
     lib/layers/anti_analysis.c
     lib/layers/static_shell.c
-    lib/layers/kernel_filter_stub.c
+    lib/layers/kernel_filter.c
     lib/layers/session_gate.c
     lib/layers/session_enc.c
-    lib/layers/channel_enc.c
     lib/layers/seq_check.c
     lib/layers/rx_demux.c
     lib/layers/resilience.c
     lib/layers/port_hop.c
     lib/connection/connection_manager.c
-    lib/connection/peer_table.c
     lib/discovery/lan_discovery.c
-    lib/discovery/beacon.c
     lib/engine/transport_engine.c
     lib/engine/heartbeat.c
     lib/engine/reconnect.c
@@ -731,3 +728,10 @@ cmake --build build_linux
 | *(new)* | `app/tui_*.c` | TUI rendering/input |
 | *(new)* | `tests/*.c` | Test scenarios |
 | `CMakeLists.txt` | `CMakeLists.txt` | Restructure for library + executables |
+
+---
+
+## 8. User-Facing Flow
+
+The end-to-end user flow (login → discover → connect → chat) is fully documented
+in **`SSM_USER_FLOW.md`**. That doc defines the target UX for all UI work.

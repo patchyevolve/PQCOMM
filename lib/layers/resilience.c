@@ -1,7 +1,6 @@
 #include "resilience.h"
 #include "channel.h"
 #include "pool.h"
-#include <stdio.h>
 #include <string.h>
 
 static int try_rebuild(packet_view_t* p, session_t* sess)
@@ -39,7 +38,6 @@ static int try_rebuild(packet_view_t* p, session_t* sess)
 
     sess->fec_recovered = rec;
 
-    if (p) printf("[FEC] recovered seq=%u len=%u from parity\n", recon_seq, recon_len);
     return 1;
 }
 

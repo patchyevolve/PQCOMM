@@ -4,19 +4,12 @@
 #include "channel.h"
 #include "pool.h"
 #include "packet_parse.h"
+#include "secure_store.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <mbedtls/sha256.h>
 #include <mbedtls/md.h>
-
-/* long-term identity key for the demo (in production this comes from secure store) */
-static const uint8_t g_identity_master_key[32] = {
-    0x6b, 0xe5, 0x79, 0x3e, 0x7a, 0x1f, 0x2c, 0xd4,
-    0x91, 0x82, 0x5a, 0x0d, 0x3b, 0xf8, 0x44, 0x97,
-    0x1c, 0x63, 0xae, 0x90, 0xf5, 0x28, 0xbb, 0x50,
-    0xcf, 0x21, 0x65, 0xde, 0x09, 0x74, 0x80, 0x3e
-};
 
 handshake_stats_t g_handshake_stats = { 0 };
 
@@ -88,12 +81,12 @@ int handshake_init_initiator(session_t* sess, uint8_t kem_type)
 
     kem_random_bytes((uint8_t*)&sess->session_id, sizeof(sess->session_id));
 
-    /* compute our identity hash: SHA-256(g_identity_master_key) */
+    /* compute our identity hash: SHA-256(secure_store_get_identity_key()) */
     {
         mbedtls_sha256_context ctx;
         mbedtls_sha256_init(&ctx);
         mbedtls_sha256_starts(&ctx, 0);
-        mbedtls_sha256_update(&ctx, g_identity_master_key, 32);
+        mbedtls_sha256_update(&ctx, secure_store_get_identity_key(), 32);
         mbedtls_sha256_finish(&ctx, sess->hs.our_identity_hash);
         mbedtls_sha256_free(&ctx);
     }
@@ -117,12 +110,12 @@ int handshake_init_responder(session_t* sess, uint8_t kem_type)
     sess->hs.timeout_ms = PHASE2_HANDSHAKE_TIMEOUT_MS;
     sess->hs.messages_exchanged = 0;
 
-    /* compute our identity hash: SHA-256(g_identity_master_key) */
+    /* compute our identity hash: SHA-256(secure_store_get_identity_key()) */
     {
         mbedtls_sha256_context ctx;
         mbedtls_sha256_init(&ctx);
         mbedtls_sha256_starts(&ctx, 0);
-        mbedtls_sha256_update(&ctx, g_identity_master_key, 32);
+        mbedtls_sha256_update(&ctx, secure_store_get_identity_key(), 32);
         mbedtls_sha256_finish(&ctx, sess->hs.our_identity_hash);
         mbedtls_sha256_free(&ctx);
     }
@@ -325,7 +318,7 @@ int handshake_build_identity(session_t* sess, packet_buf_t* out,
         const mbedtls_md_info_t* md =
             mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
         uint8_t sig[32];
-        mbedtls_md_hmac(md, g_identity_master_key, 32,
+        mbedtls_md_hmac(md, secure_store_get_identity_key(), 32,
                         sess->hs.transcript_hash, 32, sig);
         memcpy(d + 25, sig, 32);
         memset(d + 25 + 32, 0, 32);
@@ -583,7 +576,7 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet,
             const mbedtls_md_info_t* md =
                 mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
             uint8_t expected_sig[32];
-            mbedtls_md_hmac(md, g_identity_master_key, 32,
+            mbedtls_md_hmac(md, secure_store_get_identity_key(), 32,
                             pre_update_transcript, 32, expected_sig);
             if (memcmp(view->payload + 1, expected_sig, 32) != 0) {
                 printf("[HANDSHAKE] identity verification FAILED\n");

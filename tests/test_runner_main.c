@@ -20,6 +20,12 @@ extern int test_aa_clean_packet(void);
 extern int test_aa_bad_packet_scoring(void);
 extern int test_off_trusted_bypass(void);
 extern int test_off_repeated_unknown(void);
+extern int test_audio_encode_decode(void);
+extern int test_connect_basic(void);
+extern int test_session_lifecycle(void);
+extern int test_rekey_protocol(void);
+extern int test_pool_basic(void);
+extern int test_jitter_basic(void);
 
 typedef struct {
     const char* name;
@@ -46,6 +52,12 @@ static test_entry_t all_tests[] = {
     {"test_aa_bad_packet_scoring",     test_aa_bad_packet_scoring},
     {"test_off_trusted_bypass",        test_off_trusted_bypass},
     {"test_off_repeated_unknown",      test_off_repeated_unknown},
+    {"test_audio_encode_decode",       test_audio_encode_decode},
+    {"test_connect_basic",             test_connect_basic},
+    {"test_session_lifecycle",         test_session_lifecycle},
+    {"test_rekey_protocol",            test_rekey_protocol},
+    {"test_pool_basic",                test_pool_basic},
+    {"test_jitter_basic",              test_jitter_basic},
 };
 static const int num_tests = sizeof(all_tests) / sizeof(all_tests[0]);
 

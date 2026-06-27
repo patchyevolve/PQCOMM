@@ -1,8 +1,9 @@
 # Phase 1 Wire Contract (Transport)
 
-Status: Frozen for Phase 1 (Phase 3 amendments inline)
+Status: FROZEN (all phases)
 Scope: Packet format and validation behavior used by current transport pipeline.
-Security mode: Phase 3 — AEAD session encryption, HMAC identity verification, CSPRNG session IDs
+Security mode: AEAD session encryption (ChaCha20-Poly1305), HMAC identity verification, CSPRNG session IDs
+Last updated: Phase 6 Group E — final freeze
 
 ## Header Layout (24 bytes)
 

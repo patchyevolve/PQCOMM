@@ -258,27 +258,25 @@ IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT → IDENT
 
 ### Pipeline Order (Inbound Implementation)
 
-As implemented in `pipeline/pipeline_inbound.c`:
+As implemented in `pipeline/pipeline_inbound.c` (Phase 5):
 
-1. `offensive_check` — stub (returns pass)
-2. `anti_analysis_check` — stub (returns pass)
+1. `offensive_check` — trusted packet bypass (RULE-4), per-source rate limiting
+2. `anti_analysis_check` — per-source scoring: bad magic/version/flags/channel/seq → medium/high drop
 3. `static_check` — validates magic, version, flags, length, channel_id, seq
-4. `kernel_filter_check` — stub (returns pass)
-5. `session_check` — validates session_id, peer IP/port against active session
-6. `seq_check` — replay window and monotonic sequence
-7. `resilience_check` — stub (returns pass)
-8. `session_enc_check` — decrypts ChaCha20-Poly1305, verifies tag, channel key AAD binding
-9. `channel_enc_check` — stub (returns pass; channel binding in session_enc)
-10. `channel_demux` — routes to channel handler (CONTROL → control_handler)
+4. `kernel_filter_check` — IP whitelist/blocklist, port binding, size bounds (24–1500)
+5. `session_check` — validates session_id, peer IP/port against active session; multipath support
+6. `resilience_check` — FEC RX tracking, parity storage, packet recovery (runs before decrypt so FEC operates on ciphertext)
+7. `session_enc_check` — decrypts ChaCha20-Poly1305, verifies tag, channel key AAD binding
+8. `seq_check` — replay window (runs after decrypt so recovered packets get proper seq)
+10. `rx_demux_push` — routes to channel queue (CONTROL → control, CHAT → chat, ROUTE → route, etc.)
 
 ### Outbound Order
 
-1. Application builds plaintext payload
-2. `channel_demux` — assigns channel
-3. `channel_enc_apply` — stub (returns pass)
-4. `session_enc_apply` — encrypts ChaCha20-Poly1305, prepends nonce, appends tag
-5. Scheduler selects next packet from priority queues
-6. UDP send
+1. Application builds plaintext payload (or uses `pipeline_outbound_process`)
+2. `pipeline_outbound_process` — sets header fields, calls `session_enc_apply`
+3. FEC TX accumulate (if enabled) — XOR parity built across group, sent as separate flagged packet
+4. Scheduler selects next packet from priority queues (control > audio > chat > file > fake)
+5. UDP send via TX thread
 
 ---
 
@@ -296,7 +294,7 @@ As implemented in `pipeline/pipeline_inbound.c`:
 - Must be **constant time**
 - Must **not decrypt**
 - Implemented via BPF / eBPF or equivalent
-- Current implementation: stub in `layers/kernel_filter_stub.c` (returns pass)
+- Implemented in `lib/layers/kernel_filter.c` (IP whitelist/blocklist, port binding, size checks)
 
 ---
 
@@ -887,7 +885,6 @@ As implemented in `lib/engine/transport_engine.c` (run_demo):
 | `layers/session_gate.c` | Session ID + peer address binding |
 | `layers/seq_check.c` | Replay window (64-bit bitmap) |
 | `layers/session_enc.c` | Session-level AEAD encrypt/decrypt (AAD with channel binding) |
-| `layers/channel_enc.c` | Per-channel verification stub |
 | `layers/rx_demux.c` | Channel dispatch |
 | `pipeline/pipeline_inbound.c` | Inbound layer chain |
 
@@ -897,10 +894,10 @@ As implemented in `lib/engine/transport_engine.c` (run_demo):
 
 | Layer | Phase | Status | File |
 |---|---|---|---|---|
-| Offensive Shell | Phase 5 | Stub | `lib/layers/offensive.c` |
-| Anti-Analysis | Phase 5 | Stub | `lib/layers/anti_analysis.c` |
+| Offensive Shell | Phase 5 | ✅ Complete | `lib/layers/offensive.c` |
+| Anti-Analysis | Phase 5 | ✅ Complete | `lib/layers/anti_analysis.c` |
 | Static Shell | Phase 1 | ✅ Complete | `lib/layers/static_shell.c` |
-| Kernel Filter | Phase 5 | Stub | `lib/layers/kernel_filter_stub.c` |
+| Kernel Filter | Phase 5 | ✅ Complete | `lib/layers/kernel_filter.c` |
 | Session Gate | Phase 1 | ✅ Complete | `lib/layers/session_gate.c` |
 | Resilience (layer pipe) | Phase 4 | ✅ Complete | `lib/layers/resilience.c` (pipe passthrough) |
 | Resilience (engine) | Phase 4 | ✅ Complete | `lib/core/resilience_ctx.c`, `lib/engine/heartbeat.c`, `lib/engine/reconnect.c`, `lib/engine/adaptive_bitrate.c` |

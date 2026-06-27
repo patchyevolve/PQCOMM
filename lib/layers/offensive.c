@@ -3,6 +3,7 @@
 #include "packet.h"
 #include "session.h"
 #include "pool.h"
+#include "kem.h"
 #include <string.h>
 #include <time.h>
 #include <netinet/in.h>
@@ -95,4 +96,40 @@ int offensive_check(packet_view_t* p)
     /* This is an unknown/untrusted packet. Let it through for anti-analysis scoring.
        Offensive action (decoy handshake, noise) is handled outside the fast path. */
     return 0;
+}
+
+packet_buf_t* offensive_build_decoy(const struct sockaddr_in6* target)
+{
+    if (!target) return NULL;
+
+    packet_buf_t* p = pool_get();
+    if (!p) return NULL;
+
+    uint8_t* d = p->data;
+    uint32_t fake_magic = 0xDEADBEEF;
+    uint8_t crap[16];
+    kem_random_bytes(crap, sizeof(crap));
+
+    memcpy(d + 0, &fake_magic, 4);
+    memcpy(d + 4, crap, 12);
+    uint32_t decoy_len = 24 + (crap[0] % 32);
+    memset(d + 16, crap[1], decoy_len > 16 ? decoy_len - 16 : 0);
+    p->len = decoy_len;
+
+    memcpy(p->addr, target, sizeof(*target));
+    p->addr_len = sizeof(*target);
+    return p;
+}
+
+void offensive_tick(uint64_t now_ms)
+{
+    (void)now_ms;
+    /* scan for rate-limited sources and bump counters for stats */
+    for (uint32_t i = 0; i < g_offensive.count; i++) {
+        off_source_t* s = &g_offensive.sources[i];
+        if (s->rate_count > OFF_THRESHOLD / 2) {
+            g_offensive.total_decoys++;
+            break;
+        }
+    }
 }
