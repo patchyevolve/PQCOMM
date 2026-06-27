@@ -18,4 +18,7 @@ typedef struct {
     uint8_t nonce[AEAD_NONCE_SIZE];
     uint8_t tag[AEAD_TAG_SIZE];
     uint8_t encrypted;
+
+    /* phase 4: path index for multipath seq tracking */
+    uint32_t path_idx;
 } packet_view_t;

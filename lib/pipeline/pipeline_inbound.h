@@ -26,6 +26,7 @@ typedef enum
 typedef struct {
     session_t* sess;
     rx_queues_t* rxq;
+    packet_buf_t* recovered;
 } pipeline_ctx_t;
 
 pipeline_result_t pipeline_inbound_process(

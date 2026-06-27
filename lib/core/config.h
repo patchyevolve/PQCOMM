@@ -18,6 +18,7 @@
 #define HEADER_SIZE             24
 
 #define PACKET_FLAG_ENCRYPTED   0x01
+#define PACKET_FLAG_FEC_PARITY  0x02
 
 // limits for phase 4-5
 #define OFFENSIVE_MAX_SOURCES   256

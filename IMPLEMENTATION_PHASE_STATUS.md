@@ -1,6 +1,6 @@
 # Transport Implementation Status and Phase Roadmap
 
-Status date: 2026-06-27
+Status date: 2026-06-27 (updated for Phase 4.5 architecture redesign)
 
 This document records:
 - what is already implemented in the transport system,
@@ -106,6 +106,15 @@ These are wired in pipeline order and currently return pass.
 - Each channel's derived key is XOR-folded into the AEAD AAD at both encrypt and decrypt time.
 - No packet format changes needed; tampering with `channel_id` causes AEAD tag mismatch.
 
+### 1.12 Reconnect Policy (Phase 4 substep 5)
+
+- Heartbeat protocol: CTRL_HEARTBEAT (10) / CTRL_HEARTBEAT_ACK (11) opcodes, 1s interval.
+- Path state machine: ACTIVE → DEGRADED (3s no activity) → DOWN (5s no activity).
+- Reconnect protocol: CTRL_RECONNECT (12) / CTRL_RECONNECT_ACK (13) opcodes.
+- Reconnect preserves session_id, keys, replay window — no full PQ re-handshake.
+- Max 3 reconnect attempts, then drop to SESSION_IDLE.
+- Demo verified: port hop + simulated transport loss → heartbeat timeout → reconnect → session re-established.
+
 ---
 
 ## 2) Partially Implemented / Needs Hardening
@@ -134,16 +143,22 @@ These are wired in pipeline order and currently return pass.
 
 ## 3) Not Yet Implemented (Major Missing Capabilities)
 
-- Resilience functions (multipath/FEC/hop/relay/reconnect policy) — Phase 4.
-- Real kernel filter enforcement (BPF/eBPF or equivalent platform-first gate) — Phase 5.
-- Real anti-analysis behavior (pattern scoring, delay/drop/throttle) — Phase 5.
-- Real offensive-shell defensive responses (decoy, noise, rate-limit) — Phase 5.
-- Full CLI command surface from final spec — Phase 6.
-- Key lifecycle management (rotation protocol, secure storage, zeroization policy hardening) — Phase 6.
-- Audio pipeline (encode/decode thread, jitter buffer) — Phase 6.
-- Dedicated crypto thread — Phase 6.
-- Monitor/watchdog thread — Phase 6.
-- Full regression test suite (tampered tag, reused nonce, wrong channel key, replay) — Phase 7.
+- Relay / mesh routing (Phase 4 substep 6)
+- Adaptive bitrate (Phase 4 substep 7)
+- Test scenarios / test_runner (Phase 4 substep 8)
+- ASCII TUI (connection screen, chat window, status panel) — Phase 4.5/6
+- LAN discovery beacon (full implementation) — Phase 4.5
+- Connection manager with peer table (full implementation) — Phase 4.5
+- Transport engine with event dispatch (full implementation) — Phase 4.5
+- Real kernel filter enforcement (BPF/eBPF or equivalent) — Phase 5
+- Real anti-analysis behavior (pattern scoring, delay/drop/throttle) — Phase 5
+- Real offensive-shell defensive responses (decoy, noise, rate-limit) — Phase 5
+- Full CLI command surface from final spec — Phase 6
+- Key lifecycle management (rotation protocol, secure storage, zeroization policy hardening) — Phase 6
+- Audio pipeline (encode/decode thread, jitter buffer) — Phase 6
+- Dedicated crypto thread — Phase 6
+- Monitor/watchdog thread — Phase 6
+- Full regression test suite (tampered tag, reused nonce, wrong channel key, replay) — Phase 7
 
 ---
 
@@ -266,37 +281,42 @@ Goal: sustain communication quality under loss/jitter/path instability.
 
 ### Substeps (Priority Order)
 
-1. **Resilience context structure** (`core/resilience.h`):
+1. **Resilience context structure** — ✅ COMPLETE (`lib/core/resilience_ctx.h/.c`)
    - Path stats: RTT, loss rate, jitter window per remote peer
    - Loss window: sliding window of recent sequence numbers per path
    - Path state: active/down/degraded per transport path
    - Thread-safe update via lock-free atomic fields
 
-2. **FEC strategy**:
-   - Define FEC policy: Reed-Solomon or XOR-based (e.g., interleaved parity per N packets)
-   - FEC encode step in outbound pipeline (before scheduler, after encryption)
-   - FEC decode step in inbound pipeline (after resilience layer, before session gate)
-   - Configurable FEC rate (1:N) based on observed loss
-   - No FEC allocation in fast path (pre-allocated FEC buffer per path)
+2. **FEC strategy** — ✅ COMPLETE
+   - XOR-based intra-group parity (group size 4)
+   - TX accumulate after encrypt, parity packet on group complete
+   - RX track + store parity + rebuild from N-1
+   - Configurable FEC rate, pre-allocated buffers
+   - Loss simulation: drop seq=5, recover via parity
 
-3. **Multipath transport**:
-   - Multiple UDP socket pairs (primary + backup)
-   - Path selection policy: lowest-loss, lowest-RTT, or round-robin
-   - Per-path sequence space (independent seq counters per path)
-   - Path health monitoring via periodic probe packets (CONTROL channel opcodes)
-   - Transparent to session layer — session_id unchanged (RULE-15)
+3. **Multipath transport** — ✅ COMPLETE
+   - 2 UDP socket pairs (9001/9002 + 9003/9004)
+   - Path selection: lowest-loss policy
+   - Per-path sequence space (independent recv_bitmap per path)
+   - Path health monitoring (loss window, RTT smoothing)
+   - Transparent to session layer (RULE-15 compliant)
 
-4. **Port hop**:
-   - CONTROL channel opcode for port-change command
-   - New socket bind on alternate port, old socket drained
-   - Graceful transition: both ports live during handover window
-   - Configurable hop interval or on-demand via CLI
+4. **Port hop** — ✅ COMPLETE
+   - CTRL_PORT_HOP (8) / CTRL_PORT_HOP_ACK (9) opcodes
+   - Port hop request → ACK protocol on CONTROL channel
+   - Peer address update via session_register_path
+   - Demo: hop to local_port + 4 after chat messages
 
-5. **Reconnect policy**:
-   - Detect transport loss via heartbeat timeout (separate from handshake timeout)
-   - Re-establish UDP connectivity without session reset
-   - Preserve session_id, keys, replay window across reconnect
-   - Max reconnect attempts before session drop
+5. **Reconnect policy** — ✅ COMPLETE
+    - Detect transport loss via heartbeat timeout (ACTIVE → DEGRADED → DOWN)
+    - CTRL_HEARTBEAT (10) / CTRL_HEARTBEAT_ACK (11) opcodes for path health
+    - CTRL_RECONNECT (12) / CTRL_RECONNECT_ACK (13) opcodes for reconnect
+    - Heartbeat: 1s interval, sent by heartbeat_tick in event loop
+    - DEGRADED after 3× heartbeat interval without activity
+    - DOWN after reconnect_timeout_ms (5s) without activity
+    - Reconnect preserves session_id, keys, replay window
+    - Max 3 reconnect attempts before dropping session to SESSION_IDLE
+    - Demo: port hop → simulated transport loss → heartbeat timeout → reconnect request → ACK → session re-established
 
 6. **Relay / mesh routing**:
    - ROUTE channel (channel 5) for relay control messages
@@ -316,6 +336,72 @@ Goal: sustain communication quality under loss/jitter/path instability.
    - Reconnect without session reset (kill + restore transport)
    - Port hop during active data flow (no dropped packets)
    - FEC decode under configurable loss rates
+
+---
+
+## Phase 4.5 — Architecture Restructure (Project Refactor)
+
+Goal: restructure project around libtransport_core.a library with clean public API,
+TUI frontend, and test runner, before continuing Phase 4 substeps.
+
+**Trigger**: decision to support hybrid peer discovery (manual + LAN broadcast),
+professional ASCII TUI, and a separate test runner. The existing flat structure
+does not support these cleanly.
+
+### Design Documents
+
+All architecture decisions consolidated in `ARCHITECTURE.md` (target design)
+and this document (implementation status).
+
+### Substeps
+
+| Step | Description | Status |
+|---|---|---|---|
+| 4.5.1 | Create directory structure `lib/`, `app/`, `tests/`, `api/`, `engine/`, `connection/`, `discovery/` | ✅ Complete |
+| 4.5.2 | Move source files into `lib/` directories, update `#include` paths | ✅ Complete |
+| 4.5.3 | Create `api/transport_api.h` — public C API for TUI + test_runner | ✅ Complete |
+| 4.5.4 | Create `engine/transport_engine.c` — orchestrator, thread lifecycle, event dispatch | ✅ Complete |
+| 4.5.5 | Create `connection/connection_manager.c` — peer table, connect/disconnect state machine | ✅ Complete (stub) |
+| 4.5.6 | Create `discovery/lan_discovery.c` — UDP beacon broadcast, peer timeout | ✅ Complete (stub) |
+| 4.5.7 | Restructure `CMakeLists.txt` — libtransport.a + transport + test_runner targets | ✅ Complete |
+| 4.5.8 | Build and verify existing FEC/multipath/port-hop demo still works | ✅ Complete |
+| 4.5.9 | Update AGENTS.md, IMPLEMENTATION_PHASE_STATUS.md, file map | ✅ Complete |
+
+### Target Project Layout
+
+```
+transport/
+├── CMakeLists.txt               # Top-level build
+├── ARCHITECTURE.md              # Full system design (target)
+├── lib/                         # Static library libtransport_core.a
+│   ├── api/transport_api.h      # Public API header
+│   ├── core/                    # Session, pool, scheduler, rings, UDP, threads
+│   ├── crypto/                  # KEM, HKDF, AEAD
+│   ├── handshake/               # 6-message PQ handshake
+│   ├── pipeline/                # Inbound/outbound pipeline
+│   ├── layers/                  # All pipeline layers
+│   ├── connection/              # Connection manager, peer table
+│   ├── discovery/               # LAN discovery beacon
+│   └── engine/                  # Transport engine, timer wheel
+├── app/                         # TUI executable (transport)
+│   ├── main.c
+│   ├── tui_screen.c
+│   ├── tui_input.c
+│   └── tui_panels.c
+└── tests/                       # Test runner executable
+    ├── test_runner_main.c
+    ├── test_connect.c
+    ├── test_fec_loss.c
+    └── ...
+```
+
+### Build Artifacts
+
+| Artifact | Type | Depends on |
+|---|---|---|
+| `libtransport_core.a` | Static library | All lib/ sources |
+| `transport` | TUI executable | libtransport_core.a + app/ sources |
+| `test_runner` | Test executable | libtransport_core.a + tests/ sources |
 
 ---
 

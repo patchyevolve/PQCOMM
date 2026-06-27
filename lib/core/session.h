@@ -22,6 +22,12 @@
 #define CTRL_IDENTITY_PROOF     5
 #define CTRL_SESSION_LOCKED     6
 #define CTRL_HANDSHAKE_ERROR    7
+#define CTRL_PORT_HOP           8
+#define CTRL_PORT_HOP_ACK       9
+#define CTRL_HEARTBEAT          10
+#define CTRL_HEARTBEAT_ACK      11
+#define CTRL_RECONNECT          12
+#define CTRL_RECONNECT_ACK      13
 
 #define HS_ERR_NONE             0
 #define HS_ERR_UNSUPPORTED_KEM  1
@@ -82,6 +88,17 @@ typedef struct {
     session_keys_t keys;
     resilience_t resilience;
     uint8_t handshake_complete;
+    packet_buf_t* fec_recovered;
+    uint8_t peer_addrs[RESILIENCE_MAX_PATHS][32];
+    uint32_t peer_addr_lens[RESILIENCE_MAX_PATHS];
+    uint16_t local_port;
+    uint16_t hop_target_port;
+    uint64_t hop_start_ms;
+    uint32_t reconnect_attempts;
+    uint64_t last_heartbeat_rx_ms;
+    uint8_t reconnect_pending;
+    uint64_t reconnect_start_ms;
+    uint64_t ignore_heartbeats_until_ms;
 } session_t;
 
 typedef struct {
@@ -116,3 +133,4 @@ session_t* session_alloc_for_peer(void* addr, int addr_len, session_dir_t dir);
 session_t* session_find_by_id(uint64_t session_id);
 session_t* session_find_by_addr(void* addr, int addr_len);
 int session_register(session_t* sess, void* addr, int addr_len, session_dir_t dir);
+int session_register_path(session_t* sess, uint32_t path_idx, void* addr, int addr_len);

@@ -14,7 +14,8 @@ int static_check(packet_view_t* p)
         return -1;
     if (p->length == 0 || p->length > 1400)
         return -1;
-    if (p->flags & ~PACKET_FLAG_ENCRYPTED)
+    uint8_t allowed_flags = PACKET_FLAG_ENCRYPTED | PACKET_FLAG_FEC_PARITY;
+    if (p->flags & ~allowed_flags)
         return -1;
     if (p->channel_id < CH_CONTROL || p->channel_id > CH_ROUTE)
         return -1;

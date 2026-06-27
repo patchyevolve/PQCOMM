@@ -41,10 +41,25 @@ int session_check(session_t* s, packet_view_t* p)
 
     if (a->sin6_family != b->sin6_family)
         return -1;
-    if (a->sin6_port != b->sin6_port)
-        return -1;
     if (memcmp(a->sin6_addr.s6_addr, b->sin6_addr.s6_addr, 16) != 0)
         return -1;
 
+    /* multipath: accept packets from any registered peer address */
+    if (s->resilience.multipath_enabled) {
+        for (uint32_t i = 0; i < s->resilience.path_count; i++) {
+            if (s->peer_addr_lens[i] == 0) continue;
+            struct sockaddr_in6* path_addr = (struct sockaddr_in6*)s->peer_addrs[i];
+            if (path_addr->sin6_port == a->sin6_port) {
+                p->path_idx = i;
+                return 0;
+            }
+        }
+        return -1;
+    }
+
+    if (a->sin6_port != b->sin6_port)
+        return -1;
+
+    p->path_idx = 0;
     return 0;
 }

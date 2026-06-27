@@ -78,15 +78,26 @@ void session_reset(session_t* s)
     uint32_t current_addr_len = s->addr_len;
     memcpy(current_addr, s->addr, sizeof(s->addr));
 
+    uint8_t current_peer_addrs[RESILIENCE_MAX_PATHS][32];
+    uint32_t current_peer_lens[RESILIENCE_MAX_PATHS];
+    memcpy(current_peer_addrs, s->peer_addrs, sizeof(s->peer_addrs));
+    memcpy(current_peer_lens, s->peer_addr_lens, sizeof(s->peer_addr_lens));
+
+    uint16_t current_port = s->local_port;
+
     session_zero_secrets(s);
     memset(s, 0, sizeof(session_t));
 
+    s->local_port = current_port;
     s->session_id = current_id;
     s->addr_len = current_addr_len;
     memcpy(s->addr, current_addr, sizeof(s->addr));
+    memcpy(s->peer_addrs, current_peer_addrs, sizeof(s->peer_addrs));
+    memcpy(s->peer_addr_lens, current_peer_lens, sizeof(s->peer_addr_lens));
 
     s->state = SESSION_IDLE;
     s->role = ROLE_UNASSIGNED;
+    resilience_init(&s->resilience);
 }
 
 void session_zero_secrets(session_t* s)
@@ -95,6 +106,15 @@ void session_zero_secrets(session_t* s)
     crypto_secure_wipe(s->hs.kem_secret_key, sizeof(s->hs.kem_secret_key));
     crypto_secure_wipe(s->hs.kem_shared_secret, sizeof(s->hs.kem_shared_secret));
     crypto_secure_wipe(&s->keys, sizeof(session_keys_t));
+}
+
+int session_register_path(session_t* sess, uint32_t path_idx, void* addr, int addr_len)
+{
+    if (!sess || path_idx >= RESILIENCE_MAX_PATHS || !addr) return -1;
+    if ((size_t)addr_len > sizeof(sess->peer_addrs[path_idx])) return -1;
+    memcpy(sess->peer_addrs[path_idx], addr, addr_len);
+    sess->peer_addr_lens[path_idx] = addr_len;
+    return 0;
 }
 
 int session_is_ready_for_data(session_t* s)
