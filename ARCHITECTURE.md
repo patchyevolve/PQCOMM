@@ -38,7 +38,7 @@ transport/
 │   │   └── handshake.c             # Full 6-message handshake
 │   ├── pipeline/
 │   │   ├── pipeline_inbound.c      # 10-layer inbound chain
-│   │   ├── pipeline_outbound.c     # ❌ Outbound processing (not yet implemented)
+│   │   ├── pipeline_outbound.c     # Header build + encrypt pipeline
 │   │   └── pipeline_selftest.c     # Phase 1 selftests
 │   ├── layers/
 │   │   ├── packet_parse.c          # Single-pass parser
@@ -54,10 +54,11 @@ transport/
 │   │   └── kernel_filter.c         # Implemented (Phase 5, replaced kernel_filter_stub.c)
 │   ├── connection/                 # Connection manager
 │   │   ├── connection_manager.h / .c
-│   │   └── peer_table.h / .c       # ❌ Does not exist
+│   │   └── connection_manager.h / .c   # Peer table merged here
 │   ├── discovery/                  # LAN discovery
-│   │   ├── lan_discovery.h / .c
-│   │   └── beacon.h / .c           # ❌ Does not exist
+│   │   └── lan_discovery.h / .c    # Beacon send/recv integrated
+│   ├── identity/                   # Identity module
+│   │   └── identity.h / .c         # Username, key gen, file save/load
 │   ├── relay/                      # Relay / mesh routing
 │   │   ├── relay.h / .c            # CH_ROUTE forwarding
 │   │   └── route_table.h / .c      # Route table (16 entries)
@@ -66,13 +67,21 @@ transport/
 │       ├── heartbeat.h / .c        # Heartbeat send/handle/tick
 │       ├── reconnect.h / .c        # Reconnect protocol
 │       ├── adaptive_bitrate.h / .c # ABR: FEC group size from loss rate
-│       └── timer_wheel.h / .c      # ❌ Does not exist (heartbeat uses direct tick)
+│       ├── rekey.h / .c            # Key rotation protocol
+│       ├── crypto_worker.h / .c    # Dedicated crypto worker thread
+│       ├── audio_worker.h / .c     # Opus encode/decode, play/capture
+│       ├── audio_pipeline.h / .c   # Audio jitter buffer
+│       ├── video_worker.h / .c     # V4L2 + ffmpeg video capture/send
+│       ├── file_transfer.h / .c    # Chunked file send/receive
+│       ├── monitor.h / .c          # Watchdog thread, health checks
+│       ├── conn_request.h / .c     # Connect request/accept/decline
+│       └── timer_wheel.h / .c      # (heartbeat uses direct tick in engine)
 ├── app/                           # TUI executable (transport)
-│   ├── CMakeLists.txt
-│   ├── main.c                     # Demo entry point (calls transport_engine_run_demo)
-│   ├── tui_screen.c               # ❌ Does not exist
-│   ├── tui_input.c                # ❌ Does not exist
-│   └── tui_panels.c              # ❌ Does not exist
+│   ├── main.c                     # --tui flag for TUI, default for demo
+│   ├── tui.h / tui_screen.h / tui_input.h / tui_panels.h
+│   ├── tui_screen.c               # Raw terminal, SIGWINCH, frame renderer
+│   ├── tui_input.c                # Arrow keys, Ctrl+C/Z, per-screen handlers
+│   └── tui_panels.c               # Topbar, login, peer list, chat, popups, statusbar
 ├── tests/                         # Test runner executable
 │   ├── CMakeLists.txt
 │   ├── test_runner_main.c
@@ -545,8 +554,8 @@ test_runner executable:
 ### 7.2 Test Scenarios
 
 | Test | What it verifies | Status |
-|---|---|---|---|
-| `test_connect_basic` | Manual connect → handshake → LOCKED | Skel |
+|---|---|---|---|---|
+| `test_connect_basic` | Manual connect → handshake → LOCKED | ✅ |
 | `test_fec_recovery` | XOR parity encode → lose 1 → rebuild original | ✅ |
 | `test_fec_no_recovery_all_present` | All packets received → no false rebuild | ✅ |
 | `test_route_table_add_find` | Add entries, find by node_id | ✅ |
@@ -558,11 +567,19 @@ test_runner executable:
 | `test_path_loss_window` | 50% loss rate, then flood with receives → 0% | ✅ |
 | `test_path_state_transition` | ACTIVE → DEGRADED → DOWN → RX restores | ✅ |
 | `test_path_select` | Lowest-loss path selected, fallback on DOWN | ✅ |
-| `test_fec_loss_10pct` | Drop 10% packets, verify FEC recovers | Skel |
-| `test_fec_loss_30pct` | Drop 30% packets, verify FEC recovers | Skel |
-| `test_reconnect` | Kill transport → restore → session survives | Skel |
-| `test_port_hop` | Hop port mid-session, verify chat continues | Skel |
-| `test_multipath_failover` | Kill path 0, verify path 1 takes over | Skel |
+| `test_kf_whitelist` | Source IP whitelist blocks non-matching | ✅ |
+| `test_kf_blocklist` | Blocked IPs dropped | ✅ |
+| `test_kf_size` | Oversize/undersize packets dropped | ✅ |
+| `test_kf_port` | Wrong bound port rejected | ✅ |
+| `test_aa_clean_packet` | Clean packet passes scoring | ✅ |
+| `test_aa_bad_packet_scoring` | Bad packets accumulate score and drop | ✅ |
+| `test_off_trusted_bypass` | Trusted packets bypass rate limit | ✅ |
+| `test_off_repeated_unknown` | Unknown sources rate-limited | ✅ |
+| `test_audio_encode_decode` | Opus encode → decode matches original | ✅ |
+| `test_session_lifecycle` | Session alloc/find/reset lifecycle | ✅ |
+| `test_rekey_protocol` | Rekey init/confirm exchange both sides | ✅ |
+| `test_pool_basic` | Pool alloc/return cycle | ✅ |
+| `test_jitter_basic` | Jitter buffer insert/read/advance | ✅ |
 
 ### 7.3 Peer Simulation
 

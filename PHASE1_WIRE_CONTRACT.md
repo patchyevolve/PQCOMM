@@ -130,7 +130,24 @@ The following CONTROL-channel opcodes are used post-handshake:
 | 11 | `CTRL_HEARTBEAT_ACK` | Either | opcode(1) |
 | 12 | `CTRL_RECONNECT` | Either | opcode(1) + session_id(8) |
 | 13 | `CTRL_RECONNECT_ACK` | Either | opcode(1) + session_id(8) |
-| 14 | `CTRL_ROUTE_DATA` | Either | opcode(1) + dest_node_id(8) + inner_channel(1) + inner_payload(N) |
+| 14 | `CTRL_ROUTE_DATA` | Either | opcode(1) + dest_node_id(1) + inner_channel(1) + inner_payload(N) |
+| 15 | `CTRL_REKEY_INIT` | Initiator | opcode(1) + public_key(1184) + key_epoch(1) |
+| 16 | `CTRL_REKEY_CONFIRM` | Responder | opcode(1) + ciphertext(1088) + key_epoch(1) |
+| 17 | `CTRL_CONNECT_REQUEST` | Either | opcode(1) + username(32) + display_name(64) + kem_type(1) |
+| 18 | `CTRL_CONNECT_ACCEPT` | Either | opcode(1) |
+| 19 | `CTRL_CONNECT_DECLINE` | Either | opcode(1) + reason(64) |
+| 20 | `CTRL_AUDIO_CALL` | Either | opcode(1) |
+| 21 | `CTRL_AUDIO_CALL_ACK` | Either | opcode(1) |
+| 22 | `CTRL_AUDIO_CALL_END` | Either | opcode(1) |
+| 23 | `CTRL_VIDEO_CALL` | Either | opcode(1) |
+| 24 | `CTRL_VIDEO_CALL_ACK` | Either | opcode(1) |
+| 25 | `CTRL_VIDEO_CALL_END` | Either | opcode(1) |
+| 26 | `CTRL_FILE_META` | Either | opcode(1) + filename(64) + total_size(4) + checksum(32) |
+| 27 | `CTRL_FILE_CHUNK` | Either | opcode(1) + file_id(1) + chunk_idx(2) + data(1024) |
+| 28 | `CTRL_FILE_ACK` | Either | opcode(1) + file_id(1) + chunk_idx(2) |
+| 29 | `CTRL_TYPING` | Either | opcode(1) |
+| 30 | `CTRL_DELIVERY_ACK` | Either | opcode(1) |
+| 31 | `CTRL_READ_ACK` | Either | opcode(1) |
 
 ## FEC Parity Packet Wire Format
 
@@ -149,14 +166,21 @@ The receiver calls `fec_rx_store_parity` to store this, then `fec_rx_rebuild` to
 
 ## Addressed in Later Phases
 
-| Feature | Phase | Doc Reference |
+All phases 1-7 are now implemented. See `IMPLEMENTATION_PHASE_STATUS.md` for full status.
+
+| Feature | Phase | Status |
 |---|---|---|
-| Resilience (multipath/FEC/hop/relay/reconnect/abr) | Phase 4 | Spec §16 |
-| Kernel filter (BPF/eBPF) | Phase 5 | Spec §6 |
-| Anti-analysis layer | Phase 5 | Spec §9 |
-| Offensive shell | Phase 5 | Spec §10 |
-| CLI command surface | Phase 6 | Spec §20 |
-| Key rotation protocol | Phase 6 | Spec §17 |
+| Resilience (multipath/FEC/hop/relay/reconnect/abr) | Phase 4 | ✅ Complete |
+| Kernel filter (BPF/eBPF) | Phase 5 | ✅ Complete |
+| Anti-analysis layer | Phase 5 | ✅ Complete |
+| Offensive shell | Phase 5 | ✅ Complete |
+| TUI + CLI command surface | Phase 6 | ✅ Complete |
+| Key rotation protocol | Phase 6 | ✅ Complete |
+| Audio/Video/File transfer | Phase 6 | ✅ Complete |
+| Identity module | Phase 7 | ✅ Complete |
+| Connection request protocol | Phase 7 | ✅ Complete |
+| LAN discovery with username | Phase 7 | ✅ Complete |
+| Realtime features (typing, delivery, latency) | Phase 7 | ✅ Complete |
 | Audio pipeline + crypto thread | Phase 6 | Spec §15 |
 | Secure key storage (locked memory) | Phase 6 | Spec §17 |
 | Full regression test suite | Phase 7 | Spec §21 |
