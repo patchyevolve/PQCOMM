@@ -58,6 +58,15 @@ extern int test_property_hkdf_deterministic(void);
 extern int test_property_session_state_machine(void);
 extern int test_property_identity_key_exchange(void);
 
+/* Benchmarks */
+extern int test_bench_handshake_latency(void);
+extern int test_bench_chat_throughput(void);
+extern int test_bench_aead_encrypt(void);
+extern int test_bench_aead_decrypt(void);
+extern int test_bench_hkdf_derive(void);
+extern int test_bench_kem_keypair(void);
+extern int test_bench_kem_encaps(void);
+
 typedef struct {
     const char* name;
     int (*fn)(void);
@@ -120,6 +129,15 @@ static test_entry_t all_tests[] = {
     {"test_property_hkdf_deterministic",       test_property_hkdf_deterministic},
     {"test_property_session_state_machine",    test_property_session_state_machine},
     {"test_property_identity_key_exchange",    test_property_identity_key_exchange},
+
+    /* Benchmarks */
+    {"test_bench_handshake_latency",    test_bench_handshake_latency},
+    {"test_bench_chat_throughput",      test_bench_chat_throughput},
+    {"test_bench_aead_encrypt",         test_bench_aead_encrypt},
+    {"test_bench_aead_decrypt",         test_bench_aead_decrypt},
+    {"test_bench_hkdf_derive",          test_bench_hkdf_derive},
+    {"test_bench_kem_keypair",          test_bench_kem_keypair},
+    {"test_bench_kem_encaps",           test_bench_kem_encaps},
 };
 static const int num_tests = sizeof(all_tests) / sizeof(all_tests[0]);
 

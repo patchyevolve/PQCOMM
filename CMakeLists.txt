@@ -153,6 +153,7 @@ add_executable(test_runner
     tests/test_fuzz.c
     tests/test_load.c
     tests/test_property.c
+    tests/test_benchmark.c
 )
 
 target_link_libraries(test_runner PRIVATE transport_core m)
