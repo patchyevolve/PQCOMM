@@ -87,7 +87,10 @@ int identity_init(identity_t* id, const char* config_dir)
     if (stat(config_dir, &st) != 0)
         mkdir(config_dir, 0700);
 
-    return load_identity(id, config_dir);
+    int ret = load_identity(id, config_dir);
+    if (ret == 0)
+        secure_store_set_key(id->identity_key, 32);
+    return ret;
 }
 
 int identity_create(identity_t* id, const char* config_dir,
@@ -99,9 +102,17 @@ int identity_create(identity_t* id, const char* config_dir,
     snprintf(id->username, sizeof(id->username), "%s", username);
     snprintf(id->display_name, sizeof(id->display_name), "%s", display_name);
 
-    kem_random_bytes(id->identity_key, 32);
+    /* use IDENTITY_KEY env var if set (for cross-device key import) */
+    const char* env_key = getenv("IDENTITY_KEY");
+    if (env_key && strlen(env_key) == 64 &&
+        hex_to_bytes(env_key, id->identity_key, 32) == 0)
+    {
+        /* imported key from env var */
+    } else {
+        kem_random_bytes(id->identity_key, 32);
+    }
 
-    secure_store_init();
+    secure_store_set_key(id->identity_key, 32);
     if (save_identity(id, config_dir) != 0) return -1;
     id->initialized = 1;
     return 0;
@@ -116,6 +127,46 @@ const uint8_t* identity_get_key(identity_t* id)
 {
     if (!id || !id->initialized) return NULL;
     return id->identity_key;
+}
+
+int identity_get_key_hex(identity_t* id, char* buf, uint32_t buf_size)
+{
+    if (!id || !id->initialized || !buf || buf_size < 65) return -1;
+    bytes_to_hex(id->identity_key, 32, buf);
+    return 0;
+}
+
+int identity_get_fingerprint(identity_t* id, char* buf, uint32_t buf_size)
+{
+    if (!id || !id->initialized || !buf || buf_size < 128) return -1;
+    uint8_t hash[32];
+    mbedtls_sha256_context ctx;
+    mbedtls_sha256_init(&ctx);
+    mbedtls_sha256_starts(&ctx, 0);
+    mbedtls_sha256_update(&ctx, id->identity_key, 32);
+    mbedtls_sha256_update(&ctx, (uint8_t*)id->username, strlen(id->username));
+    mbedtls_sha256_finish(&ctx, hash);
+
+    char hex[65];
+    bytes_to_hex(hash, 32, hex);
+    int pos = 0;
+    for (int i = 0; i < 32; i++) {
+        if (buf_size - (uint32_t)pos < 4) break;
+        pos += snprintf(buf + pos, (uint32_t)(buf_size - (uint32_t)pos),
+                        "%02x%s", hash[i], i < 31 ? ":" : "");
+    }
+    return 0;
+}
+
+int identity_import_key(identity_t* id, const char* config_dir, const char* hex_key)
+{
+    if (!id || !config_dir || !hex_key) return -1;
+    if (strlen(hex_key) != 64) return -1;
+    uint8_t key[32];
+    if (hex_to_bytes(hex_key, key, 32) != 0) return -1;
+    memcpy(id->identity_key, key, 32);
+    secure_store_set_key(key, 32);
+    return save_identity(id, config_dir);
 }
 
 void identity_print_fingerprint(identity_t* id)

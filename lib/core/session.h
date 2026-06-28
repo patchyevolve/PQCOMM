@@ -77,8 +77,8 @@ typedef struct {
     uint8_t peer_public_key[KEM_MLKEM_768_PK_SIZE];
     uint8_t kem_ciphertext[KEM_MLKEM_768_CT_SIZE];
     uint8_t kem_shared_secret[KEM_MLKEM_768_SS_SIZE];
-    uint8_t our_identity_hash[32];
-    uint8_t peer_identity_hash[32];
+    uint8_t our_identity_key[32];
+    uint8_t peer_identity_key[32];
     uint8_t identity_verified;
     uint8_t transcript_hash[32];
     uint32_t messages_exchanged;

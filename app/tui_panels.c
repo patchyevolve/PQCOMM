@@ -4,6 +4,7 @@
 #include <time.h>
 #include <arpa/inet.h>
 #include <unistd.h>
+#include <mbedtls/sha256.h>
 
 int tui_panel_topbar(tui_t* t, char* buf, int max)
 {
@@ -104,7 +105,24 @@ int tui_panel_peer_list(tui_t* t, char* buf, int max)
                   "\033[1;37m Peers (%d)%s\033[0m\n", t->peer_count,
                   t->unread_count > 0 ? " \033[1;31m(!)\033[0m" : "");
 
-    int rows = t->height - 4;
+    /* fingerprint line */
+    if (t->identity_ready) {
+        char fp_short[32];
+        uint8_t hash[32];
+        mbedtls_sha256_context ctx;
+        mbedtls_sha256_init(&ctx);
+        mbedtls_sha256_starts(&ctx, 0);
+        mbedtls_sha256_update(&ctx, t->identity.identity_key, 32);
+        mbedtls_sha256_update(&ctx, (uint8_t*)t->username, strlen(t->username));
+        mbedtls_sha256_finish(&ctx, hash);
+        snprintf(fp_short, sizeof(fp_short), "%02x%02x%02x%02x...%02x%02x",
+                 hash[0], hash[1], hash[2], hash[3],
+                 hash[30], hash[31]);
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      " \033[1;30mFP: %s\033[0m  \033[1;30m[/fingerprint for full]\033[0m\n", fp_short);
+    }
+
+    int rows = t->height - (t->identity_ready ? 5 : 4);
     for (int i = 0; i < rows && i < t->peer_count; i++) {
         int idx = i + t->peer_scroll;
         if (idx >= t->peer_count) break;

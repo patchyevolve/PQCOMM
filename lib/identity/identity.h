@@ -17,4 +17,7 @@ int identity_create(identity_t* id, const char* config_dir,
                     const char* username, const char* display_name);
 int identity_load(identity_t* id, const char* config_dir);
 const uint8_t* identity_get_key(identity_t* id);
+int identity_get_key_hex(identity_t* id, char* buf, uint32_t buf_size);
+int identity_get_fingerprint(identity_t* id, char* buf, uint32_t buf_size);
+int identity_import_key(identity_t* id, const char* config_dir, const char* hex_key);
 void identity_print_fingerprint(identity_t* id);

@@ -250,6 +250,42 @@ static int run_tui(int argc, char** argv)
                 tui.dirty = 1;
                 goto done_input;
             }
+            if (strcmp(tui.input_buf, "/fingerprint") == 0 && tui.identity_ready) {
+                char fp[128];
+                identity_get_fingerprint(&id, fp, sizeof(fp));
+                tui_add_chat(&tui, fp, 0, 0);
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+            if (strcmp(tui.input_buf, "/mykey") == 0 && tui.identity_ready) {
+                char keyhex[128];
+                identity_get_key_hex(&id, keyhex, sizeof(keyhex));
+                tui_add_chat(&tui, keyhex, 0, 0);
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+            if (strncmp(tui.input_buf, "/import ", 8) == 0 && tui.identity_ready) {
+                char hex[65] = {0};
+                if (sscanf(tui.input_buf + 8, "%64s", hex) == 1 &&
+                    identity_import_key(&id, path, hex) == 0)
+                {
+                    tui.identity = id; /* sync TUI copy */
+                    char fp[128];
+                    identity_get_fingerprint(&id, fp, sizeof(fp));
+                    tui_add_chat(&tui, "Key imported", 0, 0);
+                    tui_add_chat(&tui, fp, 0, 0);
+                } else {
+                    tui_add_chat(&tui, "Usage: /import <64-char-hex-key>", 0, 0);
+                }
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
         }
         if (input == -10 && tui.screen == SCREEN_LOGIN) {
             /* login submitted */

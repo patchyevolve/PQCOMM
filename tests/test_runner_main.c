@@ -26,6 +26,8 @@ extern int test_session_lifecycle(void);
 extern int test_rekey_protocol(void);
 extern int test_pool_basic(void);
 extern int test_jitter_basic(void);
+extern int test_identity_exchange_full(void);
+extern int test_identity_bad_signature_rejected(void);
 
 typedef struct {
     const char* name;
@@ -58,6 +60,8 @@ static test_entry_t all_tests[] = {
     {"test_rekey_protocol",            test_rekey_protocol},
     {"test_pool_basic",                test_pool_basic},
     {"test_jitter_basic",              test_jitter_basic},
+    {"test_identity_exchange_full",    test_identity_exchange_full},
+    {"test_identity_bad_signature_rejected", test_identity_bad_signature_rejected},
 };
 static const int num_tests = sizeof(all_tests) / sizeof(all_tests[0]);
 
