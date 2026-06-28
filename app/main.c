@@ -13,6 +13,10 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <time.h>
+#include <signal.h>
+#include <syslog.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 static int g_transport_started = 0;
 
@@ -495,10 +499,166 @@ done_input:
     return 0;
 }
 
+/* ================================================================
+ * Daemon mode — headless background operation
+ * ================================================================ */
+
+static volatile int g_daemon_running = 1;
+
+static void daemon_signal_handler(int sig)
+{
+    if (sig == SIGTERM || sig == SIGINT) {
+        g_daemon_running = 0;
+    }
+}
+
+static void daemonize(void)
+{
+    pid_t pid = fork();
+    if (pid < 0) exit(1);
+    if (pid > 0) {
+        /* Write PID file */
+        FILE* pf = fopen("/tmp/pqcommd.pid", "w");
+        if (pf) { fprintf(pf, "%d\n", pid); fclose(pf); }
+        printf("Daemon started, PID %d\n", pid);
+        exit(0);
+    }
+    /* Child continues */
+    setsid();
+    signal(SIGCHLD, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
+
+    /* Close stdin/stdout/stderr and reopen to /dev/null */
+    close(0); close(1); close(2);
+    open("/dev/null", O_RDONLY);
+    open("/dev/null", O_WRONLY);
+    open("/dev/null", O_WRONLY);
+
+    chdir("/tmp");
+}
+
+static int run_daemon(int argc, char** argv)
+{
+    openlog("pqcommd", LOG_PID | LOG_CONS, LOG_DAEMON);
+    syslog(LOG_INFO, "pqcommd starting");
+
+    /* Set up identity */
+    identity_t id;
+    const char* config_dir = getenv("HOME");
+    char path[512];
+    if (config_dir)
+        snprintf(path, sizeof(path), "%s/.config/ssm", config_dir);
+    else
+        snprintf(path, sizeof(path), "/tmp/.config/ssm");
+
+    int identity_ok = 0;
+    if (identity_init(&id, path) == 0 && id.initialized) {
+        identity_ok = 1;
+        syslog(LOG_INFO, "loaded identity: %s", id.username);
+    }
+
+    if (!identity_ok) {
+        syslog(LOG_ERR, "no identity found, run --tui first");
+        return 1;
+    }
+
+    /* Start transport */
+    transport_config_t config;
+    memset(&config, 0, sizeof(config));
+    config.local_port = 9001;
+    config.local_port_alt = 9003;
+    config.discovery_port = 9009;
+    config.discovery_enabled = 1;
+    config.fec_enabled = 1;
+    config.fec_group_size = 4;
+    config.multipath_enabled = 0;
+    config.path_count = 1;
+    config.handshake_timeout_ms = 5000;
+    config.heartbeat_interval_ms = 1000;
+    config.reconnect_timeout_ms = 5000;
+    config.max_reconnect_attempts = 3;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--port") == 0 && i + 1 < argc)
+            config.local_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--discovery-port") == 0 && i + 1 < argc)
+            config.discovery_port = (uint16_t)atoi(argv[++i]);
+        else if (strcmp(argv[i], "--no-discovery") == 0)
+            config.discovery_enabled = 0;
+    }
+
+    if (transport_init(&config) != 0) {
+        syslog(LOG_ERR, "transport_init failed");
+        return 1;
+    }
+    lan_discovery_set_username(id.username);
+    syslog(LOG_INFO, "transport initialized, port %d", config.local_port);
+
+    /* Signal handling */
+    signal(SIGTERM, daemon_signal_handler);
+    signal(SIGINT, daemon_signal_handler);
+
+    /* Headless event loop */
+    while (g_daemon_running) {
+        transport_event_t ev;
+        while (transport_poll_event(&ev) > 0) {
+            if (ev.type == EVENT_CONNECT_REQUEST) {
+                /* Auto-accept in daemon mode */
+                transport_accept_connection(ev.data.conn_req.addr,
+                                            ev.data.conn_req.port);
+                syslog(LOG_INFO, "auto-accepted connection from %s:%d (%s)",
+                       ev.data.conn_req.addr, ev.data.conn_req.port,
+                       ev.data.conn_req.username);
+            } else if (ev.type == EVENT_CHAT_RECEIVED) {
+                syslog(LOG_INFO, "chat from %d: %s",
+                       ev.data.chat.sender_port, ev.data.chat.text);
+            } else if (ev.type == EVENT_CONNECTION_STATE_CHANGED) {
+                if (ev.data.conn_state.new_state == CONN_LOCKED)
+                    syslog(LOG_INFO, "session locked (encrypted)");
+            } else if (ev.type == EVENT_AUDIO_CALL_REQUEST) {
+                syslog(LOG_INFO, "audio call from %s (auto-accept)",
+                       ev.data.call_req.peer_username);
+                transport_audio_call_start();
+            } else if (ev.type == EVENT_VIDEO_CALL_REQUEST) {
+                syslog(LOG_INFO, "video call from %s (auto-decline)",
+                       ev.data.call_req.peer_username);
+            } else if (ev.type == EVENT_FILE_TRANSFER_COMPLETE) {
+                syslog(LOG_INFO, "file transfer complete");
+            } else if (ev.type == EVENT_FILE_TRANSFER_FAILED) {
+                syslog(LOG_WARNING, "file transfer failed");
+            }
+        }
+
+        /* Listen for connections */
+        lan_discovery_trigger_scan();
+        uint64_t now_ms = (uint64_t)time(NULL) * 1000;
+        connection_manager_mark_stale(now_ms, 30000);
+
+        usleep(200000); /* 200ms sleep */
+    }
+
+    syslog(LOG_INFO, "pqcommd shutting down");
+    transport_shutdown();
+    closelog();
+
+    /* Remove PID file */
+    unlink("/tmp/pqcommd.pid");
+
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     if (argc > 1 && strcmp(argv[1], "--tui") == 0)
         return run_tui(argc, argv);
+
+    if (argc > 1 && strcmp(argv[1], "--daemon") == 0) {
+        if (argc > 2 && strcmp(argv[2], "--foreground") == 0) {
+            return run_daemon(argc, argv);
+        }
+        daemonize();
+        return run_daemon(argc, argv);
+    }
 
     return transport_engine_run_demo();
 }
