@@ -20,4 +20,14 @@ const uint8_t* identity_get_key(identity_t* id);
 int identity_get_key_hex(identity_t* id, char* buf, uint32_t buf_size);
 int identity_get_fingerprint(identity_t* id, char* buf, uint32_t buf_size);
 int identity_import_key(identity_t* id, const char* config_dir, const char* hex_key);
+int identity_export_key(identity_t* id, const char* export_path);
+int identity_backup(identity_t* id, const char* backup_path, const char* passphrase);
+int identity_restore(identity_t* id, const char* backup_path, const char* passphrase);
 void identity_print_fingerprint(identity_t* id);
+
+/* known_hosts API — TOFU peer key storage */
+int known_hosts_add(const char* config_dir, const char* addr, uint16_t port,
+                    const char* username, const uint8_t* peer_key);
+int known_hosts_check(const char* config_dir, const char* addr, uint16_t port,
+                      const uint8_t* peer_key);
+void known_hosts_print(const char* config_dir);

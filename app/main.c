@@ -4,6 +4,7 @@
 #include "tui_input.h"
 #include "toml_config.h"
 #include "identity.h"
+#include "secure_store.h"
 #include "lan_discovery.h"
 #include "connection_manager.h"
 #include <stdio.h>
@@ -263,6 +264,61 @@ static int run_tui(int argc, char** argv)
                 char keyhex[128];
                 identity_get_key_hex(&id, keyhex, sizeof(keyhex));
                 tui_add_chat(&tui, keyhex, 0, 0);
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+            if (strcmp(tui.input_buf, "/export") == 0 && tui.identity_ready) {
+                char export_path[512];
+                snprintf(export_path, sizeof(export_path), "%s/identity_export.dat", path);
+                if (identity_export_key(&id, export_path) == 0) {
+                    tui_add_chat(&tui, "Key exported to identity_export.dat", 0, 0);
+                } else {
+                    tui_add_chat(&tui, "Export failed", 0, 0);
+                }
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+            if (strcmp(tui.input_buf, "/backup") == 0 && tui.identity_ready) {
+                char backup_path[512];
+                snprintf(backup_path, sizeof(backup_path), "%s/identity_backup.dat", path);
+                if (identity_backup(&id, backup_path, NULL) == 0) {
+                    tui_add_chat(&tui, "Backup saved to identity_backup.dat", 0, 0);
+                } else {
+                    tui_add_chat(&tui, "Backup failed", 0, 0);
+                }
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+            if (strncmp(tui.input_buf, "/restore ", 9) == 0 && tui.identity_ready) {
+                char restore_path[512];
+                sscanf(tui.input_buf + 9, "%511s", restore_path);
+                identity_t restored;
+                if (identity_restore(&restored, restore_path, NULL) == 0) {
+                    id = restored;
+                    secure_store_set_key(id.identity_key, 32);
+                    tui.identity = id;
+                    snprintf(tui.username, sizeof(tui.username), "%s", id.username);
+                    snprintf(tui.display_name, sizeof(tui.display_name), "%s", id.display_name);
+                    tui_add_chat(&tui, "Identity restored from backup", 0, 0);
+                } else {
+                    tui_add_chat(&tui, "Restore failed", 0, 0);
+                }
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+            if (strcmp(tui.input_buf, "/known_hosts") == 0) {
+                tui_add_chat(&tui, "Known hosts:", 0, 0);
+                char kh_path[512];
+                snprintf(kh_path, sizeof(kh_path), "%s", path);
+                known_hosts_print(kh_path);
                 tui.input_len = 0;
                 tui.input_pos = 0;
                 tui.dirty = 1;

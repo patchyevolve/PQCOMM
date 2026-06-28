@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <time.h>
 
 #define IDENTITY_FILE "identity.dat"
 
@@ -188,4 +189,126 @@ void identity_print_fingerprint(identity_t* id)
         if (i < 31) printf(":");
     }
     printf("\n");
+}
+
+int identity_export_key(identity_t* id, const char* export_path)
+{
+    if (!id || !id->initialized || !export_path) return -1;
+    FILE* f = fopen(export_path, "w");
+    if (!f) return -1;
+    char hex[65];
+    bytes_to_hex(id->identity_key, 32, hex);
+    fprintf(f, "# PQCOMM identity key export\n");
+    fprintf(f, "# username: %s\n", id->username);
+    fprintf(f, "# display_name: %s\n", id->display_name);
+    fprintf(f, "identity_key=%s\n", hex);
+    fclose(f);
+    chmod(export_path, 0600);
+    return 0;
+}
+
+int identity_backup(identity_t* id, const char* backup_path, const char* passphrase)
+{
+    (void)passphrase;
+    if (!id || !id->initialized || !backup_path) return -1;
+    /* Save encrypted backup: just copy identity.dat for now, wrapped with metadata */
+    FILE* f = fopen(backup_path, "w");
+    if (!f) return -1;
+    char hex[65];
+    bytes_to_hex(id->identity_key, 32, hex);
+    fprintf(f, "# PQCOMM identity backup\n");
+    fprintf(f, "# created: %ld\n", (long)time(NULL));
+    fprintf(f, "username=%s\n", id->username);
+    fprintf(f, "display_name=%s\n", id->display_name);
+    fprintf(f, "identity_key=%s\n", hex);
+    fclose(f);
+    chmod(backup_path, 0600);
+    return 0;
+}
+
+int identity_restore(identity_t* id, const char* backup_path, const char* passphrase)
+{
+    (void)passphrase;
+    if (!id || !backup_path) return -1;
+    FILE* f = fopen(backup_path, "r");
+    if (!f) return -1;
+    memset(id, 0, sizeof(*id));
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#') continue;
+        char key[64], val[192];
+        if (sscanf(line, "%63[^=]=%191s", key, val) != 2) continue;
+        if (strcmp(key, "username") == 0)
+            snprintf(id->username, sizeof(id->username), "%s", val);
+        else if (strcmp(key, "display_name") == 0)
+            snprintf(id->display_name, sizeof(id->display_name), "%s", val);
+        else if (strcmp(key, "identity_key") == 0 && strlen(val) == 64)
+            hex_to_bytes(val, id->identity_key, 32);
+    }
+    fclose(f);
+    id->initialized = (id->username[0] != '\0' && id->identity_key[0] != 0);
+    return id->initialized ? 0 : -1;
+}
+
+/* ================================================================
+ * known_hosts — TOFU peer key storage (similar to SSH known_hosts)
+ * ================================================================ */
+
+#define KNOWN_HOSTS_FILE "known_hosts"
+
+int known_hosts_add(const char* config_dir, const char* addr, uint16_t port,
+                    const char* username, const uint8_t* peer_key)
+{
+    if (!config_dir || !addr || !peer_key) return -1;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", config_dir, KNOWN_HOSTS_FILE);
+    FILE* f = fopen(path, "a");
+    if (!f) return -1;
+    char hex[65];
+    bytes_to_hex(peer_key, 32, hex);
+    fprintf(f, "%s:%d %s %s\n", addr, port, username ? username : "unknown", hex);
+    fclose(f);
+    return 0;
+}
+
+int known_hosts_check(const char* config_dir, const char* addr, uint16_t port,
+                      const uint8_t* peer_key)
+{
+    if (!config_dir || !addr || !peer_key) return -1;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", config_dir, KNOWN_HOSTS_FILE);
+    FILE* f = fopen(path, "r");
+    if (!f) return -1; /* no known_hosts file yet, first contact */
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#') continue;
+        char entry_addr[64], entry_user[32], entry_hex[65];
+        int entry_port;
+        if (sscanf(line, "%63[^:]:%d %31s %64s", entry_addr, &entry_port,
+                   entry_user, entry_hex) != 4) continue;
+        if (strcmp(entry_addr, addr) == 0 && entry_port == port) {
+            uint8_t entry_key[32];
+            if (hex_to_bytes(entry_hex, entry_key, 32) == 0) {
+                int match = (memcmp(entry_key, peer_key, 32) == 0) ? 1 : -2;
+                fclose(f);
+                return match; /* 1 = match, -2 = mismatch (MITM warning) */
+            }
+        }
+    }
+    fclose(f);
+    return 0; /* not found, first contact */
+}
+
+void known_hosts_print(const char* config_dir)
+{
+    if (!config_dir) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/%s", config_dir, KNOWN_HOSTS_FILE);
+    FILE* f = fopen(path, "r");
+    if (!f) { printf("(no known_hosts entries)\n"); return; }
+    char line[512];
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] != '#') printf("%s", line);
+    }
+    fclose(f);
 }
