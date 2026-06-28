@@ -128,12 +128,12 @@ typedef struct {
 } session_t;
 
 typedef struct {
-    uint32_t attempts_total;
-    uint32_t successes;
-    uint32_t failures_timeout;
-    uint32_t failures_identity;
-    uint32_t failures_replay;
-    uint32_t failures_state;
+    volatile uint32_t attempts_total;
+    volatile uint32_t successes;
+    volatile uint32_t failures_timeout;
+    volatile uint32_t failures_identity;
+    volatile uint32_t failures_replay;
+    volatile uint32_t failures_state;
 } handshake_stats_t;
 
 extern handshake_stats_t g_handshake_stats;

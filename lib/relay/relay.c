@@ -39,7 +39,7 @@ int relay_forward_route(packet_buf_t* p, packet_view_t* view,
     packet_buf_t* fwd = pool_get();
     if (!fwd) return 1;
 
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, flags = 0;
     uint32_t seq = (*seq_counter)++;
     uint32_t plen = inner_len;
@@ -68,7 +68,7 @@ int relay_forward_route(packet_buf_t* p, packet_view_t* view,
 
     memcpy(fwd->addr, peer_addr, sizeof(*peer_addr));
     fwd->addr_len = sizeof(*peer_addr);
-    ring_push(&txq->chat, fwd);
+    if (ring_push(&txq->chat, fwd) != 0) { pool_return(fwd); return 1; }
 
     printf("[RELAY] forwarded seq=%u to node %lu ch=%u (%u bytes)\n",
            seq, (unsigned long)dest_node_id, inner_channel, inner_len);
@@ -88,7 +88,7 @@ int relay_build_test_packet(session_t* sess, uint32_t* seq_counter,
     uint32_t msg_len = (uint32_t)strlen(message) + 1;
     uint32_t route_hdr = 1 + 8 + 1;
     uint32_t plen = route_hdr + msg_len;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, flags = 0;
     uint8_t ch = CH_ROUTE;
     uint32_t seq = (*seq_counter)++;

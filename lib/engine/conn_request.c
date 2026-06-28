@@ -27,7 +27,7 @@ int conn_request_build(session_t* sess, tx_queues_t* txq, uint32_t* seq,
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
     uint32_t seq_n = (*seq)++;
 
@@ -49,7 +49,7 @@ int conn_request_build(session_t* sess, tx_queues_t* txq, uint32_t* seq,
     memcpy(p->addr, sess->addr, sizeof(struct sockaddr_in6));
     p->addr_len = sizeof(struct sockaddr_in6);
 
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
     return 0;
 }
 
@@ -116,7 +116,7 @@ int conn_request_send_accept(session_t* sess, tx_queues_t* txq, uint32_t* seq,
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
     uint32_t seq_n = (*seq)++;
 
@@ -134,7 +134,7 @@ int conn_request_send_accept(session_t* sess, tx_queues_t* txq, uint32_t* seq,
     memcpy(p->addr, peer_addr, sizeof(*peer_addr));
     p->addr_len = sizeof(*peer_addr);
 
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
     return 0;
 }
 
@@ -151,7 +151,7 @@ int conn_request_send_decline(session_t* sess, tx_queues_t* txq, uint32_t* seq,
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
     uint32_t seq_n = (*seq)++;
 
@@ -171,7 +171,7 @@ int conn_request_send_decline(session_t* sess, tx_queues_t* txq, uint32_t* seq,
     memcpy(p->addr, peer_addr, sizeof(*peer_addr));
     p->addr_len = sizeof(*peer_addr);
 
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
     return 0;
 }
 

@@ -91,7 +91,7 @@ int anti_analysis_check(packet_view_t* p)
     int is_bad = 0;
 
     /* bad magic */
-    if (p->magic != 0xAABBCCDD) is_bad = 1;
+    if (p->magic != PROTO_MAGIC) is_bad = 1;
     /* bad version */
     if (p->version != 1) is_bad = 1;
     /* bad flags */

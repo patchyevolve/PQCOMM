@@ -43,7 +43,7 @@ static void* crypto_loop(void* arg)
                 int ret = session_enc_check(&view, job->sess);
                 session_unlock_keys(job->sess);
                 if (ret == 0) {
-                    ring_push(&g_result_ring, job->p);
+                    if (ring_push(&g_result_ring, job->p) != 0) pool_return(job->p);
                 } else {
                     pool_return(job->p);
                 }
@@ -57,7 +57,7 @@ static void* crypto_loop(void* arg)
                 session_enc_apply(job->p, &view, job->sess);
                 session_unlock_keys(job->sess);
             }
-            ring_push(&g_result_ring, job->p);
+            if (ring_push(&g_result_ring, job->p) != 0) pool_return(job->p);
         }
 
         free(job);

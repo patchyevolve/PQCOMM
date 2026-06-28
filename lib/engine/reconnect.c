@@ -2,6 +2,7 @@
 #include "channel.h"
 #include "pool.h"
 #include "ring.h"
+#include "session.h"
 #include <stdio.h>
 #include <string.h>
 #ifdef _WIN32
@@ -21,7 +22,7 @@ int reconnect_send_request(session_t* sess, tx_queues_t* txq, uint32_t* seq_coun
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0, channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
     uint32_t payload_len = 1 + 8 + 8;
@@ -43,7 +44,7 @@ int reconnect_send_request(session_t* sess, tx_queues_t* txq, uint32_t* seq_coun
     p->len = 24 + payload_len;
     memcpy(p->addr, sess->addr, sizeof(sess->addr));
     p->addr_len = sess->addr_len;
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
 
     sess->reconnect_attempts++;
     sess->reconnect_start_ms = 0;
@@ -59,7 +60,7 @@ int reconnect_send_ack(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter,
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0, channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
     uint32_t payload_len = 1 + 8;
@@ -79,7 +80,7 @@ int reconnect_send_ack(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter,
     p->len = 24 + payload_len;
     memcpy(p->addr, dest, sizeof(*dest));
     p->addr_len = sizeof(*dest);
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
 
     printf("[RECONNECT] ack sent\n");
     return 0;
@@ -147,6 +148,7 @@ int reconnect_tick(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter, uin
     if (sess->reconnect_attempts >= sess->resilience.max_reconnect_attempts) {
         printf("[RECONNECT] max attempts (%u) reached, dropping session\n",
                sess->resilience.max_reconnect_attempts);
+        session_zero_secrets(sess);
         sess->state = SESSION_IDLE;
         return -1;
     }

@@ -18,7 +18,7 @@ int port_hop_send_request(session_t* sess, tx_queues_t* txq,
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0;
     uint8_t channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
@@ -41,7 +41,7 @@ int port_hop_send_request(session_t* sess, tx_queues_t* txq,
     p->len = 24 + payload_len;
     memcpy(p->addr, peer_addr, sizeof(*peer_addr));
     p->addr_len = sizeof(*peer_addr);
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
 
     sess->hop_target_port = new_port;
     printf("[PORT_HOP] request sent: hop to port %u\n", new_port);
@@ -56,7 +56,7 @@ int port_hop_send_ack(session_t* sess, tx_queues_t* txq,
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0;
     uint8_t channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
@@ -77,7 +77,7 @@ int port_hop_send_ack(session_t* sess, tx_queues_t* txq,
     p->len = 24 + payload_len;
     memcpy(p->addr, peer_addr, sizeof(*peer_addr));
     p->addr_len = sizeof(*peer_addr);
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
 
     printf("[PORT_HOP] ack sent\n");
     return 0;

@@ -143,7 +143,7 @@ packet_buf_t* handshake_build_hello(session_t* sess, uint32_t* seq_counter)
 
     uint8_t* d = p->data;
     memset(d, 0, 24);
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0, channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
     uint32_t payload_len = 1;
@@ -176,7 +176,7 @@ int handshake_build_accept(session_t* sess, packet_buf_t* out, uint32_t* seq_cou
     memset(d, 0, 24);
     uint32_t payload_len = 1 + 8;
 
-    memcpy(d + 0, (uint32_t[]){ 0xAABBCCDD }, sizeof(uint32_t));
+    memcpy(d + 0, (uint32_t[]){ PROTO_MAGIC }, sizeof(uint32_t));
     d[4] = 1;
     d[5] = 0;
     memcpy(d + 6, &session_id, sizeof(session_id));
@@ -218,7 +218,7 @@ int handshake_build_kem_init(session_t* sess, packet_buf_t* out,
 
     uint8_t* d = out->data;
     memset(d, 0, 24);
-    uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
+    uint32_t magic = PROTO_MAGIC, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
@@ -274,7 +274,7 @@ int handshake_build_kem_response(session_t* sess, packet_buf_t* out,
     {
         uint8_t* d = out->data;
         memset(d, 0, 24);
-        uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
+        uint32_t magic = PROTO_MAGIC, version = 1, flags = 0;
         uint64_t session_id = sess->session_id;
         uint8_t channel = CH_CONTROL;
         uint32_t seq = (*seq_counter)++;
@@ -314,7 +314,7 @@ int handshake_build_identity(session_t* sess, packet_buf_t* out,
 
     uint8_t* d = out->data;
     memset(d, 0, 24);
-    uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
+    uint32_t magic = PROTO_MAGIC, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
@@ -336,7 +336,11 @@ int handshake_build_identity(session_t* sess, packet_buf_t* out,
     derive_id_proof_key(sess->hs.kem_shared_secret, sess->hs.transcript_hash,
                         "pqcomm-id-proof", proof_key, nonce);
     if (aead_encrypt(proof_key, nonce, NULL, 0,
-                     proof_plain, 64, cipher, tag) != 0) return -1;
+                     proof_plain, 64, cipher, tag) != 0) {
+        crypto_secure_wipe(proof_key, sizeof(proof_key));
+        crypto_secure_wipe(proof_plain, sizeof(proof_plain));
+        return -1;
+    }
     crypto_secure_wipe(proof_key, sizeof(proof_key));
     crypto_secure_wipe(proof_plain, sizeof(proof_plain));
 
@@ -368,7 +372,7 @@ int handshake_build_locked(session_t* sess, packet_buf_t* out,
 
     uint8_t* d = out->data;
     memset(d, 0, 24);
-    uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
+    uint32_t magic = PROTO_MAGIC, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
@@ -385,7 +389,11 @@ int handshake_build_locked(session_t* sess, packet_buf_t* out,
     derive_id_proof_key(sess->hs.kem_shared_secret, sess->hs.transcript_hash,
                         "pqcomm-lock-proof", proof_key, nonce);
     if (aead_encrypt(proof_key, nonce, NULL, 0,
-                     proof_plain, 64, cipher, tag) != 0) return -1;
+                     proof_plain, 64, cipher, tag) != 0) {
+        crypto_secure_wipe(proof_key, sizeof(proof_key));
+        crypto_secure_wipe(proof_plain, sizeof(proof_plain));
+        return -1;
+    }
     crypto_secure_wipe(proof_key, sizeof(proof_key));
     crypto_secure_wipe(proof_plain, sizeof(proof_plain));
     uint32_t payload_len = 1 + 12 + 64 + 16;
@@ -432,7 +440,7 @@ int handshake_build_error(session_t* sess, packet_buf_t* out,
 
     uint8_t* d = out->data;
     memset(d, 0, 24);
-    uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
+    uint32_t magic = PROTO_MAGIC, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;

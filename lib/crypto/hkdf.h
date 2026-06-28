@@ -25,4 +25,4 @@ int hkdf(const uint8_t* salt, uint32_t salt_len,
 int derive_session_keys(const uint8_t* kem_secret, uint32_t secret_len,
                         const uint8_t* transcript_hash, uint32_t hash_len,
                         uint8_t* session_key, uint32_t sk_len,
-                        uint8_t channel_keys[5][32]);
+                        uint8_t channel_keys[6][32]);

@@ -87,7 +87,7 @@ int offensive_check(packet_view_t* p)
 
     /* rate limit: if source exceeds threshold, return pass (let later layers drop) */
     /* trust check: matched session + known channel — bypass offense per RULE-4 */
-    if (p->session_id != 0 && p->channel_id >= 1 && p->channel_id <= 5 &&
+    if (p->session_id != 0 && p->channel_id >= 1 && p->channel_id <= 6 &&
         p->magic == 0xAABBCCDD && p->version == 1) {
         /* trusted packet — always bypass (RULE-4) */
         return 0;
@@ -111,7 +111,7 @@ packet_buf_t* offensive_build_decoy(const struct sockaddr_in6* target)
     if (!p) return NULL;
 
     uint8_t* d = p->data;
-    uint32_t fake_magic = 0xDEADBEEF;
+    uint32_t fake_magic = DECOY_MAGIC;
     uint8_t crap[16];
     kem_random_bytes(crap, sizeof(crap));
 

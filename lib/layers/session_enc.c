@@ -10,7 +10,7 @@ static int build_aad(packet_view_t* view, session_t* sess, uint8_t aad[HEADER_SI
     aad[5] &= ~PACKET_FLAG_ENCRYPTED;
 
     /* channel binding: fold channel key into AAD */
-    if (sess && view->channel_id < 5) {
+    if (sess && view->channel_id < 6) {
         const uint8_t* ck = sess->keys.channel_keys[view->channel_id];
         for (int i = 0; i < HEADER_SIZE; i++)
             aad[i] ^= ck[i & 31];
@@ -63,7 +63,7 @@ int session_enc_apply(packet_buf_t* p, packet_view_t* view, session_t* sess)
     memcpy(aad, p->data, HEADER_SIZE);
     aad[5] &= ~PACKET_FLAG_ENCRYPTED;
     /* channel binding: fold channel key into AAD */
-    if (view->channel_id < 5) {
+    if (view->channel_id < 6) {
         const uint8_t* ck = sess->keys.channel_keys[view->channel_id];
         for (int i = 0; i < HEADER_SIZE; i++)
             aad[i] ^= ck[i & 31];

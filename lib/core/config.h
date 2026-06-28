@@ -17,6 +17,9 @@
 #define AEAD_TAG_SIZE           16
 #define HEADER_SIZE             24
 
+#define PROTO_MAGIC             0xAABBCCDD
+#define DECOY_MAGIC             0xDEADBEEF
+
 #define PACKET_FLAG_ENCRYPTED   0x01
 #define PACKET_FLAG_FEC_PARITY  0x02
 

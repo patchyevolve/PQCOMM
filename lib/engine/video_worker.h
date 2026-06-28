@@ -14,8 +14,8 @@
 typedef struct {
     video_capture_t capture;
     video_display_t display;
-    int running;
-    int active;
+    volatile int running;
+    volatile int active;
     int tx_seq;
     int rx_frame_count;
 } video_worker_t;

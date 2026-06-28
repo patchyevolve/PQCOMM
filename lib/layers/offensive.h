@@ -23,8 +23,8 @@ typedef struct {
 typedef struct {
     off_source_t sources[OFF_MAX_SOURCES];
     uint32_t count;
-    uint32_t total_decoys;
-    uint32_t total_noise;
+    volatile uint32_t total_decoys;
+    volatile uint32_t total_noise;
     uint32_t reserve_pool;
 } offensive_t;
 

@@ -16,8 +16,8 @@ typedef struct {
     audio_ctx_t codec;
     audio_capture_t capture;
     audio_playback_t playback;
-    int running;
-    int active; /* call active flag */
+    volatile int running;
+    volatile int active; /* call active flag */
     int tx_seq;
 } audio_worker_t;
 

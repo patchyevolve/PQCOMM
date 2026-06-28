@@ -1,7 +1,7 @@
 #include "static_shell.h"
 #include "channel.h"
+#include "config.h"
 
-#define PROTO_MAGIC   0xAABBCCDD
 #define PROTO_VERSION 1
 
 int static_check(packet_view_t* p)
@@ -17,7 +17,7 @@ int static_check(packet_view_t* p)
     uint8_t allowed_flags = PACKET_FLAG_ENCRYPTED | PACKET_FLAG_FEC_PARITY;
     if (p->flags & ~allowed_flags)
         return -1;
-    if (p->channel_id < CH_CONTROL || p->channel_id > CH_ROUTE)
+    if (p->channel_id < CH_CONTROL || p->channel_id > CH_VIDEO)
         return -1;
     if (p->seq == 0)
         return -1;

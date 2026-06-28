@@ -7,6 +7,7 @@
 /* Windows stub — BPF is Linux-only */
 int kernel_filter_bpf_create_map(void) { return -1; }
 void kernel_filter_bpf_destroy_map(void) {}
+int kernel_filter_bpf_unload(void) { return -1; }
 int kernel_filter_bpf_sync(uint32_t whitelist_enabled, uint32_t blocklist_enabled)
     { (void)whitelist_enabled; (void)blocklist_enabled; return -1; }
 int kernel_filter_bpf_load(void) { return -1; }
@@ -139,10 +140,12 @@ void kernel_filter_bpf_destroy_map(void)
     }
 }
 
-int kernel_filter_bpf_sync(uint32_t key, uint32_t value)
+int kernel_filter_bpf_sync(uint32_t whitelist_enabled, uint32_t blocklist_enabled)
 {
     if (g_bpf_map_fd < 0) return -1;
 
+    uint32_t key = whitelist_enabled;
+    uint32_t value = blocklist_enabled;
     union bpf_attr attr;
     memset(&attr, 0, sizeof(attr));
     attr.map_fd = g_bpf_map_fd;

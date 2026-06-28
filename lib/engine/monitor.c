@@ -33,22 +33,6 @@ static int g_liveness_count = 0;
 
 static monitor_snapshot_t g_snapshot;
 
-void monitor_mark_alive(const char* name)
-{
-    uint64_t t = platform_now_ms();
-    for (int i = 0; i < g_liveness_count; i++) {
-        if (strcmp(g_liveness[i].name, name) == 0) {
-            g_liveness[i].last_tick_ms = t;
-            return;
-        }
-    }
-    if (g_liveness_count < MAX_LIVENESS_ENTRIES) {
-        snprintf(g_liveness[g_liveness_count].name, sizeof(g_liveness[g_liveness_count].name), "%s", name);
-        g_liveness[g_liveness_count].last_tick_ms = t;
-        g_liveness_count++;
-    }
-}
-
 static void snap_lock(void)
 {
 #ifdef _WIN32
@@ -67,6 +51,25 @@ static void snap_unlock(void)
 #endif
 }
 
+void monitor_mark_alive(const char* name)
+{
+    uint64_t t = platform_now_ms();
+    snap_lock();
+    for (int i = 0; i < g_liveness_count; i++) {
+        if (strcmp(g_liveness[i].name, name) == 0) {
+            g_liveness[i].last_tick_ms = t;
+            snap_unlock();
+            return;
+        }
+    }
+    if (g_liveness_count < MAX_LIVENESS_ENTRIES) {
+        snprintf(g_liveness[g_liveness_count].name, sizeof(g_liveness[g_liveness_count].name), "%s", name);
+        g_liveness[g_liveness_count].last_tick_ms = t;
+        g_liveness_count++;
+    }
+    snap_unlock();
+}
+
 static void sample(void)
 {
     monitor_snapshot_t snap;
@@ -82,6 +85,7 @@ static void sample(void)
                               g_handshake_stats.failures_state;
 
     uint64_t t = platform_now_ms();
+    snap_lock();
     for (int i = 0; i < g_liveness_count; i++) {
         if (t - g_liveness[i].last_tick_ms > STALL_THRESHOLD_MS) {
             if (strcmp(g_liveness[i].name, "rx-worker") == 0) snap.rx_thread_stalled++;
@@ -89,6 +93,7 @@ static void sample(void)
             if (strcmp(g_liveness[i].name, "crypto") == 0) snap.crypto_thread_stalled++;
         }
     }
+    snap_unlock();
 
     snap.total_drops = g_offensive.total_decoys;
 

@@ -14,7 +14,7 @@ int heartbeat_send(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter, uin
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0, channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
     uint32_t payload_len = 1 + 8 + 8;
@@ -35,7 +35,7 @@ int heartbeat_send(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter, uin
     p->len = 24 + payload_len;
     memcpy(p->addr, sess->addr, sizeof(sess->addr));
     p->addr_len = sess->addr_len;
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
 
     sess->resilience.last_heartbeat_ms = now_ms;
     return 0;
@@ -59,7 +59,7 @@ int heartbeat_handle(packet_buf_t* p, session_t* sess, tx_queues_t* txq,
         packet_buf_t* ack = pool_get();
         if (!ack) return 0;
         uint8_t* d = ack->data;
-        uint32_t magic = 0xAABBCCDD;
+        uint32_t magic = PROTO_MAGIC;
         uint8_t version = 1, flags = 0, channel = CH_CONTROL;
         uint32_t seq = (*seq_counter)++;
         uint32_t payload_len = 1 + 8 + 8;
@@ -77,7 +77,7 @@ int heartbeat_handle(packet_buf_t* p, session_t* sess, tx_queues_t* txq,
         ack->len = 24 + payload_len;
         memcpy(ack->addr, p->addr, sizeof(p->addr));
         ack->addr_len = p->addr_len;
-        ring_push(&txq->control, ack);
+        if (ring_push(&txq->control, ack) != 0) pool_return(ack);
         return 1;
     }
 

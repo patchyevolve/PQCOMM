@@ -35,7 +35,7 @@ int rekey_initiate(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter)
     if (!p) return -1;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0, channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
 
@@ -58,7 +58,7 @@ int rekey_initiate(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter)
 
     memcpy(sess->hs.kem_secret_key, sk, sk_size);
 
-    ring_push(&txq->control, p);
+    if (ring_push(&txq->control, p) != 0) pool_return(p);
     return 0;
 }
 
@@ -71,7 +71,7 @@ static int derive_rekey_keys(session_t* sess, const uint8_t* shared_secret, uint
     memset(context + 16, 0x00, 24);
 
     uint8_t session_key[32];
-    uint8_t channel_keys[5][32];
+    uint8_t channel_keys[6][32];
     if (derive_session_keys(shared_secret, ss_len, context, sizeof(context),
                             session_key, 32, channel_keys) != 0)
         return -1;
@@ -79,7 +79,7 @@ static int derive_rekey_keys(session_t* sess, const uint8_t* shared_secret, uint
     session_lock_keys(sess);
     crypto_secure_wipe(&sess->keys, sizeof(sess->keys));
     memcpy(sess->keys.session_key, session_key, 32);
-    for (int i = 0; i < 5; i++)
+    for (int i = 0; i < 6; i++)
         memcpy(sess->keys.channel_keys[i], channel_keys[i], 32);
     sess->keys.key_epoch = epoch;
     session_unlock_keys(sess);
@@ -119,7 +119,7 @@ int rekey_handle(packet_buf_t* p, session_t* sess, tx_queues_t* txq, uint32_t* s
         if (!resp) return -1;
 
         uint8_t* d = resp->data;
-        uint32_t magic = 0xAABBCCDD;
+        uint32_t magic = PROTO_MAGIC;
         uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
         memcpy(d + 0, &magic, 4);
         memcpy(d + 4, &ver, 1);
@@ -137,7 +137,7 @@ int rekey_handle(packet_buf_t* p, session_t* sess, tx_queues_t* txq, uint32_t* s
 
         memcpy(resp->addr, p->addr, sizeof(struct sockaddr_in6));
         resp->addr_len = sizeof(struct sockaddr_in6);
-        ring_push(&txq->control, resp);
+        if (ring_push(&txq->control, resp) != 0) pool_return(resp);
         return 1;
     }
 

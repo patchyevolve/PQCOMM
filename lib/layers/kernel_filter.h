@@ -15,10 +15,10 @@ typedef struct {
     kf_addr_t blocklist[KF_MAX_LIST];
     uint32_t blocklist_count;
     uint16_t bound_port;
-    uint32_t drops_port;
-    uint32_t drops_size;
-    uint32_t drops_blocked;
-    uint32_t passes;
+    volatile uint32_t drops_port;
+    volatile uint32_t drops_size;
+    volatile uint32_t drops_blocked;
+    volatile uint32_t passes;
 } kernel_filter_t;
 
 extern kernel_filter_t g_kernel_filter;

@@ -19,9 +19,9 @@ typedef struct {
     uint32_t count;
     uint64_t last_evict_ms;
     uint64_t evict_interval_ms;
-    uint32_t drops_medium;
-    uint32_t drops_high;
-    uint32_t delayed_packets;
+    volatile uint32_t drops_medium;
+    volatile uint32_t drops_high;
+    volatile uint32_t delayed_packets;
 } anti_analysis_t;
 
 extern anti_analysis_t g_anti_analysis;

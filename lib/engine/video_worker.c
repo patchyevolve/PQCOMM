@@ -57,7 +57,7 @@ int video_worker_tick(video_worker_t* w, session_t* sess, tx_queues_t* txq, rx_q
             packet_buf_t* p = pool_get();
             if (p && jpeg_len > 0) {
                 uint8_t* d = p->data;
-                uint32_t magic = 0xAABBCCDD;
+                uint32_t magic = PROTO_MAGIC;
                 uint8_t ver = 1, fl = 0, ch = CH_VIDEO;
                 uint32_t seq = (*seq_counter)++;
                 memcpy(d + 0, &magic, 4);
@@ -79,10 +79,8 @@ int video_worker_tick(video_worker_t* w, session_t* sess, tx_queues_t* txq, rx_q
                     memcpy(p->addr, peer_addr, sizeof(*peer_addr));
                     p->addr_len = sizeof(*peer_addr);
                 }
-                ring_push(&txq->video, p);
+                if (ring_push(&txq->video, p) != 0) pool_return(p);
                 w->tx_seq++;
-            } else if (!p) {
-                pool_return(p);
             }
         }
     }

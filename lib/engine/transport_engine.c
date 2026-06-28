@@ -115,7 +115,7 @@ static packet_buf_t* build_chat_packet(session_t* sess, uint32_t* seq_counter,
     if (!p) return NULL;
 
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t version = 1, flags = 0, channel = CH_CHAT;
     uint32_t seq = (*seq_counter)++;
     uint32_t payload_len = (uint32_t)strlen(msg) + 1;
@@ -163,7 +163,7 @@ static void fec_tx_after_encrypt(packet_buf_t* p, session_t* sess, tx_queues_t* 
         packet_buf_t* par = pool_get();
         if (!par) return;
         uint8_t* d = par->data;
-        uint32_t magic = 0xAABBCCDD;
+        uint32_t magic = PROTO_MAGIC;
         uint8_t ver = 1, fl = 0x02;
         memset(d, 0, 24);
         memcpy(d + 0, &magic, 4);
@@ -177,7 +177,7 @@ static void fec_tx_after_encrypt(packet_buf_t* p, session_t* sess, tx_queues_t* 
         par->len = 24 + parity_len;
         memcpy(par->addr, peer_addr, sizeof(*peer_addr));
         par->addr_len = sizeof(*peer_addr);
-        ring_push(&txq->control, par);
+        if (ring_push(&txq->control, par) != 0) pool_return(par);
     }
 }
 
@@ -368,7 +368,7 @@ int transport_engine_connect(transport_engine_t* eng, const char* addr_str, uint
 
     memcpy(hello->addr, &eng->peer_addr, sizeof(eng->peer_addr));
     hello->addr_len = sizeof(eng->peer_addr);
-    ring_push(&eng->tx_queues[path_idx].control, hello);
+    if (ring_push(&eng->tx_queues[path_idx].control, hello) != 0) pool_return(hello);
 
     eng->session_is_locked = 0;
 
@@ -503,7 +503,7 @@ static void engine_control_handler(transport_engine_t* eng, packet_buf_t* p)
     if (response) {
         memcpy(response->addr, &eng->peer_addr, sizeof(eng->peer_addr));
         response->addr_len = sizeof(eng->peer_addr);
-        ring_push(&eng->tx_queues[0].control, response);
+        if (ring_push(&eng->tx_queues[0].control, response) != 0) pool_return(response);
     }
 
     pool_return(p);
@@ -623,7 +623,7 @@ static void engine_responder_handler(transport_engine_t* eng, packet_buf_t* p)
     if (response) {
         memcpy(response->addr, &eng->peer_addr, sizeof(eng->peer_addr));
         response->addr_len = sizeof(eng->peer_addr);
-        ring_push(&eng->tx_queues[0].control, response);
+        if (ring_push(&eng->tx_queues[0].control, response) != 0) pool_return(response);
     }
 
     pool_return(p);
@@ -686,7 +686,7 @@ int transport_engine_send_chat(transport_engine_t* eng, const char* text)
     chat->addr_len = sizeof(*addrs[path_idx]);
 
     tx_queues_t* txq = &eng->tx_queues[path_idx];
-    ring_push(&txq->chat, chat);
+    if (ring_push(&txq->chat, chat) != 0) pool_return(chat);
     return 0;
 }
 
@@ -819,7 +819,7 @@ int transport_engine_poll(transport_engine_t* eng, transport_event_t* ev)
         packet_buf_t* decoy = offensive_build_decoy(&eng->peer_addr);
         if (decoy) {
             g_offensive.total_decoys++;
-            ring_push(&eng->tx_queues[0].control, decoy);
+            if (ring_push(&eng->tx_queues[0].control, decoy) != 0) pool_return(decoy);
         }
     }
 
@@ -846,7 +846,7 @@ int transport_engine_poll(transport_engine_t* eng, transport_event_t* ev)
             packet_buf_t* p = pool_get();
             if (p) {
                 uint8_t* d = p->data;
-                uint32_t magic = 0xAABBCCDD;
+                uint32_t magic = PROTO_MAGIC;
                 uint8_t ver = 1, fl = 0, ch = CH_FILE;
                 memcpy(d + 0, &magic, 4);
                 memcpy(d + 4, &ver, 1);
@@ -863,7 +863,7 @@ int transport_engine_poll(transport_engine_t* eng, transport_event_t* ev)
                     session_enc_apply(p, &view, eng->session);
                 memcpy(p->addr, &eng->peer_addr, sizeof(eng->peer_addr));
                 p->addr_len = sizeof(eng->peer_addr);
-                ring_push(&eng->tx_queues[0].file, p);
+                if (ring_push(&eng->tx_queues[0].file, p) != 0) pool_return(p);
             }
         }
         if (done == 1) {
@@ -1070,7 +1070,7 @@ int transport_engine_send_file(transport_engine_t* eng, const char* filepath)
     packet_buf_t* p = pool_get();
     if (!p) return -1;
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
     uint32_t seq = eng->seq_counter++;
     memcpy(d + 0, &magic, 4);
@@ -1084,7 +1084,7 @@ int transport_engine_send_file(transport_engine_t* eng, const char* filepath)
     p->len = 24 + meta_len;
     memcpy(p->addr, &eng->peer_addr, sizeof(eng->peer_addr));
     p->addr_len = sizeof(eng->peer_addr);
-    ring_push(&eng->tx_queues[0].control, p);
+    if (ring_push(&eng->tx_queues[0].control, p) != 0) pool_return(p);
 
     eng->cur_file_send_idx = idx;
     return 0;
@@ -1098,7 +1098,7 @@ int transport_engine_send_typing(transport_engine_t* eng)
     packet_buf_t* p = pool_get();
     if (!p) return -1;
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
     uint32_t seq = eng->seq_counter++;
     uint32_t payload_len = 1;
@@ -1114,7 +1114,7 @@ int transport_engine_send_typing(transport_engine_t* eng)
     p->len = 24 + payload_len;
     memcpy(p->addr, &eng->peer_addr, sizeof(eng->peer_addr));
     p->addr_len = sizeof(eng->peer_addr);
-    ring_push(&eng->tx_queues[0].control, p);
+    if (ring_push(&eng->tx_queues[0].control, p) != 0) pool_return(p);
     return 0;
 }
 
@@ -1126,7 +1126,7 @@ int transport_engine_send_delivery_ack(transport_engine_t* eng, uint32_t msg_seq
     packet_buf_t* p = pool_get();
     if (!p) return -1;
     uint8_t* d = p->data;
-    uint32_t magic = 0xAABBCCDD;
+    uint32_t magic = PROTO_MAGIC;
     uint8_t ver = 1, fl = 0, ch = CH_CONTROL;
     uint32_t seq = eng->seq_counter++;
     uint32_t payload_len = 1 + 4;
@@ -1143,7 +1143,7 @@ int transport_engine_send_delivery_ack(transport_engine_t* eng, uint32_t msg_seq
     p->len = 24 + payload_len;
     memcpy(p->addr, &eng->peer_addr, sizeof(eng->peer_addr));
     p->addr_len = sizeof(eng->peer_addr);
-    ring_push(&eng->tx_queues[0].control, p);
+    if (ring_push(&eng->tx_queues[0].control, p) != 0) pool_return(p);
     return 0;
 }
 
@@ -1225,7 +1225,7 @@ void control_handler_initiator(packet_buf_t* p, void* ctx_ptr)
     if (response) {
         memcpy(response->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
         response->addr_len = sizeof(g_initiator_peer_addr);
-        ring_push(&ctx->txq->control, response);
+        if (ring_push(&ctx->txq->control, response) != 0) pool_return(response);
     }
 
     pool_return(p);
@@ -1253,8 +1253,8 @@ void control_handler_initiator(packet_buf_t* p, void* ctx_ptr)
                     printf("[FEC LOSS DROP] seq=%u path=%u\n",
                            *(uint32_t*)(chat->data + 15), path);
                     pool_return(chat);
-                } else {
-                    ring_push(&txqs[path]->control, chat);
+                } else if (ring_push(&txqs[path]->control, chat) != 0) {
+                    pool_return(chat);
                 }
             }
         }
@@ -1266,7 +1266,7 @@ void control_handler_initiator(packet_buf_t* p, void* ctx_ptr)
                                         "hello via relay!", &route_pkt) == 0) {
                 memcpy(route_pkt->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
                 route_pkt->addr_len = sizeof(g_initiator_peer_addr);
-                ring_push(&ctx->txq->chat, route_pkt);
+                if (ring_push(&ctx->txq->chat, route_pkt) != 0) pool_return(route_pkt);
                 printf("[RELAY] sent route test to responder\n");
             }
         }
@@ -1408,7 +1408,7 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
     if (response) {
         memcpy(response->addr, &g_responder_peer_addr, sizeof(g_responder_peer_addr));
         response->addr_len = sizeof(g_responder_peer_addr);
-        ring_push(&ctx->txq->control, response);
+        if (ring_push(&ctx->txq->control, response) != 0) pool_return(response);
     }
 
     pool_return(p);
@@ -1440,8 +1440,8 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
                     printf("[FEC LOSS DROP] seq=%u path=%u\n",
                            *(uint32_t*)(chat->data + 15), path);
                     pool_return(chat);
-                } else {
-                    ring_push(&txqs[path]->control, chat);
+                } else if (ring_push(&txqs[path]->control, chat) != 0) {
+                    pool_return(chat);
                 }
             }
         }
@@ -1562,7 +1562,7 @@ int transport_engine_run_demo(void)
     if (!hello) { printf("failed to build hello\n"); return 1; }
     memcpy(hello->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
     hello->addr_len = sizeof(g_initiator_peer_addr);
-    ring_push(&queues_initiator.control, hello);
+    if (ring_push(&queues_initiator.control, hello) != 0) pool_return(hello);
     printf("[MAIN] initiator sent hello\n");
 
     spsc_ring_t rx_ring_a1, rx_ring_b1;
@@ -1706,7 +1706,7 @@ int transport_engine_run_demo(void)
             packet_buf_t* fp = pool_get();
             int sent = 0;
             if (fp) {
-                uint32_t magic = 0xAABBCCDD;
+                uint32_t magic = PROTO_MAGIC;
                 uint8_t ver = 1, fl = 0, ch = CH_FILE;
                 memcpy(fp->data + 0, &magic, 4);
                 memcpy(fp->data + 4, &ver, 1);
