@@ -149,6 +149,10 @@ add_executable(test_runner
     tests/test_audio.c
     tests/test_jitter.c
     tests/test_identity.c
+    tests/test_lan_integration.c
+    tests/test_fuzz.c
+    tests/test_load.c
+    tests/test_property.c
 )
 
 target_link_libraries(test_runner PRIVATE transport_core m)

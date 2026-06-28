@@ -29,6 +29,35 @@ extern int test_jitter_basic(void);
 extern int test_identity_exchange_full(void);
 extern int test_identity_bad_signature_rejected(void);
 
+/* LAN integration tests */
+extern int test_lan_full_handshake(void);
+extern int test_lan_encrypted_chat(void);
+extern int test_lan_rekey(void);
+extern int test_lan_delivery_protocol(void);
+extern int test_lan_audio_control(void);
+extern int test_lan_mismatched_identity(void);
+
+/* Fuzz tests */
+extern int test_fuzz_handshake_corruption(void);
+extern int test_fuzz_aead_corruption(void);
+extern int test_fuzz_pipeline_corruption(void);
+extern int test_fuzz_hkdf_random(void);
+extern int test_fuzz_pool_alloc_stress(void);
+extern int test_fuzz_session_enc_edge(void);
+
+/* Load/stress tests */
+extern int test_load_bulk_chat_messages(void);
+extern int test_load_multi_session_concurrent(void);
+extern int test_load_random_delay_handshake(void);
+extern int test_load_reconnect_cycle(void);
+
+/* Property-based tests */
+extern int test_property_session_key_agreement(void);
+extern int test_property_aead_roundtrip(void);
+extern int test_property_hkdf_deterministic(void);
+extern int test_property_session_state_machine(void);
+extern int test_property_identity_key_exchange(void);
+
 typedef struct {
     const char* name;
     int (*fn)(void);
@@ -62,6 +91,35 @@ static test_entry_t all_tests[] = {
     {"test_jitter_basic",              test_jitter_basic},
     {"test_identity_exchange_full",    test_identity_exchange_full},
     {"test_identity_bad_signature_rejected", test_identity_bad_signature_rejected},
+
+    /* LAN integration */
+    {"test_lan_full_handshake",            test_lan_full_handshake},
+    {"test_lan_encrypted_chat",            test_lan_encrypted_chat},
+    {"test_lan_rekey",                     test_lan_rekey},
+    {"test_lan_delivery_protocol",         test_lan_delivery_protocol},
+    {"test_lan_audio_control",             test_lan_audio_control},
+    {"test_lan_mismatched_identity",       test_lan_mismatched_identity},
+
+    /* Fuzz */
+    {"test_fuzz_handshake_corruption",     test_fuzz_handshake_corruption},
+    {"test_fuzz_aead_corruption",          test_fuzz_aead_corruption},
+    {"test_fuzz_pipeline_corruption",      test_fuzz_pipeline_corruption},
+    {"test_fuzz_hkdf_random",              test_fuzz_hkdf_random},
+    {"test_fuzz_pool_alloc_stress",        test_fuzz_pool_alloc_stress},
+    {"test_fuzz_session_enc_edge",         test_fuzz_session_enc_edge},
+
+    /* Load */
+    {"test_load_bulk_chat_messages",       test_load_bulk_chat_messages},
+    {"test_load_multi_session_concurrent", test_load_multi_session_concurrent},
+    {"test_load_random_delay_handshake",   test_load_random_delay_handshake},
+    {"test_load_reconnect_cycle",          test_load_reconnect_cycle},
+
+    /* Property */
+    {"test_property_session_key_agreement",    test_property_session_key_agreement},
+    {"test_property_aead_roundtrip",           test_property_aead_roundtrip},
+    {"test_property_hkdf_deterministic",       test_property_hkdf_deterministic},
+    {"test_property_session_state_machine",    test_property_session_state_machine},
+    {"test_property_identity_key_exchange",    test_property_identity_key_exchange},
 };
 static const int num_tests = sizeof(all_tests) / sizeof(all_tests[0]);
 
