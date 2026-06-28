@@ -98,6 +98,7 @@ target_link_libraries(transport_core PUBLIC
 target_include_directories(transport_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/api>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/core>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/core>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/crypto>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/handshake>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/layers>

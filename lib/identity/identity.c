@@ -1,12 +1,11 @@
 #include "identity.h"
 #include "kem.h"
 #include "secure_store.h"
+#include "platform.h"
 #include <mbedtls/sha256.h>
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <time.h>
 
 #define IDENTITY_FILE "identity.dat"
@@ -46,7 +45,7 @@ static int save_identity(identity_t* id, const char* config_dir)
     fprintf(f, "identity_key=%s\n", hex);
 
     fclose(f);
-    chmod(path, 0600);
+    platform_chmod(path, 0600);
     return 0;
 }
 
@@ -84,9 +83,8 @@ int identity_init(identity_t* id, const char* config_dir)
     if (!id || !config_dir) return -1;
     memset(id, 0, sizeof(*id));
 
-    struct stat st;
-    if (stat(config_dir, &st) != 0)
-        mkdir(config_dir, 0700);
+    if (platform_stat_exists(config_dir) == 0)
+        platform_mkdir(config_dir);
 
     int ret = load_identity(id, config_dir);
     if (ret == 0)
@@ -203,7 +201,7 @@ int identity_export_key(identity_t* id, const char* export_path)
     fprintf(f, "# display_name: %s\n", id->display_name);
     fprintf(f, "identity_key=%s\n", hex);
     fclose(f);
-    chmod(export_path, 0600);
+    platform_chmod(export_path, 0600);
     return 0;
 }
 
@@ -222,7 +220,7 @@ int identity_backup(identity_t* id, const char* backup_path, const char* passphr
     fprintf(f, "display_name=%s\n", id->display_name);
     fprintf(f, "identity_key=%s\n", hex);
     fclose(f);
-    chmod(backup_path, 0600);
+    platform_chmod(backup_path, 0600);
     return 0;
 }
 

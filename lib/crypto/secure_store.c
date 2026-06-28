@@ -1,13 +1,9 @@
 #include "secure_store.h"
 #include "kem.h"
+#include "platform.h"
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
-
-#ifdef __linux__
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
 
 static uint8_t g_identity_key[IDENTITY_KEY_SIZE];
 static int g_key_initialized = 0;
@@ -47,10 +43,11 @@ int secure_store_init(void)
         memcpy(g_identity_key, g_fallback_key, IDENTITY_KEY_SIZE);
     }
 
-#ifdef __linux__
-    if (mlock(g_identity_key, IDENTITY_KEY_SIZE) != 0) {
-        perror("[SECURE_STORE] mlock failed");
+    if (platform_mlock(g_identity_key, IDENTITY_KEY_SIZE) != 0) {
+        perror("[SECURE_STORE] memory lock failed");
     }
+    /* Linux-only: prevent key from appearing in coredumps */
+#ifdef __linux__
     if (madvise(g_identity_key, IDENTITY_KEY_SIZE, MADV_DONTDUMP) != 0) {
         perror("[SECURE_STORE] madvise DONTDUMP failed");
     }
@@ -77,9 +74,7 @@ const uint8_t* secure_store_get_identity_key(void)
 void secure_store_shutdown(void)
 {
     if (!g_key_initialized) return;
-#ifdef __linux__
-    munlock(g_identity_key, IDENTITY_KEY_SIZE);
-#endif
+    platform_munlock(g_identity_key, IDENTITY_KEY_SIZE);
     crypto_secure_wipe(g_identity_key, IDENTITY_KEY_SIZE);
     g_key_initialized = 0;
 }
