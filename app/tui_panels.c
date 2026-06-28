@@ -1,10 +1,16 @@
 #include "tui_panels.h"
+#include "group.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include <mbedtls/sha256.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <arpa/inet.h>
+#endif
 
 int tui_panel_topbar(tui_t* t, char* buf, int max)
 {
@@ -330,12 +336,19 @@ int tui_panel_statusbar(tui_t* t, char* buf, int max)
                       "\033[%d;%dH%s", t->height, 1, hints);
     } else if (t->screen == SCREEN_PEER_LIST) {
         n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
-                      "\033[%d;%dH\033[1;30m [\xe2\x86\x91\xe2\x86\x93/j/k:nav] [\xe2\x86\x92/Enter:select] [\xe2\x86\x90/Esc:back] [r:refresh] [q:quit]\033[0m",
+                      "\033[%d;%dH\033[1;30m [\xe2\x86\x91\xe2\x86\x93/j/k:nav] [\xe2\x86\x92/Enter:select] [\xe2\x86\x90/Esc:back] [g:rooms] [r:refresh] [q:quit]\033[0m",
                       t->height, 1);
     } else if (t->screen == SCREEN_CHAT && t->conn_info.state != CONN_LOCKED) {
         n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
                       "\033[%d;%dH\033[1;30m [\xe2\x86\x90/Esc:back] [Type:message] [Enter:send]\033[0m",
                       t->height, 1);
+    } else if (t->screen == SCREEN_GROUP) {
+        const char* focus_label = "Rooms";
+        if (t->group_focus == GROUP_FOCUS_CHAT) focus_label = "Chat";
+        else if (t->group_focus == GROUP_FOCUS_MEMBERS) focus_label = "Members";
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[1;30m [Tab:focus=%s] [j/k:nav] [Enter:select] [Esc:back] [q:quit]\033[0m",
+                      t->height, 1, focus_label);
     }
 
     if (t->input_active) {
@@ -343,5 +356,174 @@ int tui_panel_statusbar(tui_t* t, char* buf, int max)
         n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
                       "\033[%d;%dH\033[5m_\033[0m", t->height - 1, col);
     }
+    return n;
+}
+
+int tui_panel_room_sidebar(tui_t* t, char* buf, int max)
+{
+    int n = 0;
+    int sw = 20;
+    if (sw > t->width / 4) sw = t->width / 4;
+    if (sw < 12) sw = 12;
+
+    int rooms_avail = t->height - 2;
+    int count;
+    group_room_t* rooms = group_get_rooms(&count);
+
+    n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                  "\033[%d;%dH\033[1;47;30m %-*s\033[0m",
+                  2, 1, sw - 2, "Rooms");
+
+    int lines = 0;
+    for (int i = t->group_room_scroll; i < count && lines < rooms_avail - 1; i++, lines++) {
+        int row = 3 + lines;
+        group_room_t* r = &rooms[i];
+        int is_current = strcmp(r->name, t->current_room) == 0;
+        const char* sel = (t->group_focus == GROUP_FOCUS_ROOMS && i == t->group_room_scroll + lines)
+                          ? "\033[1;33m>\033[0m" : " ";
+
+        const char* hl = is_current ? "\033[1;37;44m" : "\033[0m";
+
+        /* Truncate name to fit */
+        char display[18];
+        snprintf(display, sizeof(display), "%-16s", r->name);
+        display[16] = '\0';
+
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH%s%s%.*s\033[0m",
+                      row, 1, sel, hl, sw - 3, display);
+        /* Clear rest of sidebar row */
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[K");
+    }
+
+    /* Clear remaining rows in sidebar area */
+    for (; lines < rooms_avail - 1; lines++) {
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[K", 3 + lines, 1);
+    }
+
+    /* Vertical separator */
+    n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                  "\033[%d;%dH\033[1;37m|\033[0m",
+                  t->height, sw);
+    return n;
+}
+
+int tui_panel_group_chat(tui_t* t, char* buf, int max)
+{
+    int n = 0;
+    int sw = 20;
+    if (sw > t->width / 4) sw = t->width / 4;
+    if (sw < 12) sw = 12;
+    int mw = 20;
+    if (mw > t->width / 4) mw = t->width / 4;
+    if (mw < 12) mw = 12;
+    int chat_left = sw + 1;
+    int chat_width = t->width - sw - mw - 2;
+
+    group_room_t* room = t->current_room[0] ? group_find(t->current_room) : NULL;
+
+    /* Header */
+    char hdr[64];
+    if (room)
+        snprintf(hdr, sizeof(hdr), " #%s", room->name);
+    else
+        snprintf(hdr, sizeof(hdr), " No room selected");
+    n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                  "\033[%d;%dH\033[1;47;30m%-*s\033[0m",
+                  2, chat_left, chat_width, hdr);
+
+    if (!room || room->msg_count == 0) {
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[1;30m%s\033[0m",
+                      4, chat_left,
+                      room ? " No messages yet" : " Select a room");
+        return n;
+    }
+
+    int chat_h = t->height - 6;
+    int start = room->msg_count > chat_h ? room->msg_count - chat_h : 0;
+    int lines = 0;
+    for (int i = start; i < room->msg_count && lines < chat_h; i++, lines++) {
+        group_message_t* msg = &room->messages[i];
+        time_t ts_sec = (time_t)(msg->timestamp_ms / 1000);
+        struct tm* tm_info = localtime(&ts_sec);
+        char ts[16];
+        if (tm_info) {
+            strftime(ts, sizeof(ts), "%H:%M", tm_info);
+        } else {
+            snprintf(ts, sizeof(ts), "??:??");
+        }
+        int row = 3 + lines;
+
+        /* Clear chat line first */
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[K", row, chat_left);
+
+        int is_self = strcmp(msg->sender, t->username) == 0;
+        const char* sender_color = is_self ? "\033[1;34m" : "\033[1;32m";
+        char display_text[256];
+        snprintf(display_text, sizeof(display_text), "%.*s",
+                 chat_width > 30 ? chat_width - 30 : 80, msg->text);
+
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[1;30m[%s]\033[0m %s[%s]\033[0m %s",
+                      row, chat_left, ts, sender_color, msg->sender, display_text);
+    }
+
+    /* Clear remaining chat rows */
+    for (; lines < chat_h; lines++) {
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[K", 3 + lines, chat_left);
+    }
+
+    return n;
+}
+
+int tui_panel_member_sidebar(tui_t* t, char* buf, int max)
+{
+    int n = 0;
+    int mw = 20;
+    if (mw > t->width / 4) mw = t->width / 4;
+    if (mw < 12) mw = 12;
+    int member_right = t->width - mw + 1;
+
+    group_room_t* room = t->current_room[0] ? group_find(t->current_room) : NULL;
+
+    n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                  "\033[%d;%dH\033[1;47;30m %-*s\033[0m",
+                  2, member_right, mw - 2, "Members");
+
+    int avail = t->height - 2;
+    int lines = 0;
+
+    if (room) {
+        for (int i = t->group_member_scroll; i < room->member_count && lines < avail - 1; i++, lines++) {
+            int row = 3 + lines;
+            group_member_t* m = &room->members[i];
+            const char* dot = m->is_online ? "\033[1;32m●\033[0m" : "\033[1;31m○\033[0m";
+            const char* hl = (t->group_focus == GROUP_FOCUS_MEMBERS && i == t->group_member_scroll + lines)
+                             ? "\033[7m" : "";
+
+            char display[16];
+            snprintf(display, sizeof(display), "%-14s", m->username);
+            display[14] = '\0';
+
+            n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                          "\033[%d;%dH%s %s%.*s\033[0m\033[K",
+                          row, member_right, dot, hl, mw - 4, display);
+        }
+    }
+
+    for (; lines < avail - 1; lines++) {
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[K", 3 + lines, member_right);
+    }
+
+    /* Vertical separator */
+    n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                  "\033[%d;%dH\033[1;37m|\033[0m",
+                  t->height, t->width - mw);
     return n;
 }

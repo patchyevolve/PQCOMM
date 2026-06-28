@@ -2,18 +2,24 @@
 #include "pool.h"
 #include "offensive.h"
 #include "handshake.h"
+#include "platform.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <pthread.h>
-#include <time.h>
 
 #define MONITOR_INTERVAL_MS 2000
 #define STALL_THRESHOLD_MS  5000
 
 extern handshake_stats_t g_handshake_stats;
 
+#ifdef _WIN32
+static HANDLE g_monitor_thread;
+static CRITICAL_SECTION g_snap_mutex;
+#else
 static pthread_t g_monitor_thread;
+static pthread_mutex_t g_snap_mutex = PTHREAD_MUTEX_INITIALIZER;
+#endif
+
 static volatile int g_monitor_running = 0;
 
 typedef struct {
@@ -26,18 +32,10 @@ static liveness_entry_t g_liveness[MAX_LIVENESS_ENTRIES];
 static int g_liveness_count = 0;
 
 static monitor_snapshot_t g_snapshot;
-static pthread_mutex_t g_snap_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-static uint64_t now_ms(void)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
-}
 
 void monitor_mark_alive(const char* name)
 {
-    uint64_t t = now_ms();
+    uint64_t t = platform_now_ms();
     for (int i = 0; i < g_liveness_count; i++) {
         if (strcmp(g_liveness[i].name, name) == 0) {
             g_liveness[i].last_tick_ms = t;
@@ -49,6 +47,24 @@ void monitor_mark_alive(const char* name)
         g_liveness[g_liveness_count].last_tick_ms = t;
         g_liveness_count++;
     }
+}
+
+static void snap_lock(void)
+{
+#ifdef _WIN32
+    EnterCriticalSection(&g_snap_mutex);
+#else
+    pthread_mutex_lock(&g_snap_mutex);
+#endif
+}
+
+static void snap_unlock(void)
+{
+#ifdef _WIN32
+    LeaveCriticalSection(&g_snap_mutex);
+#else
+    pthread_mutex_unlock(&g_snap_mutex);
+#endif
 }
 
 static void sample(void)
@@ -65,7 +81,7 @@ static void sample(void)
                               g_handshake_stats.failures_replay +
                               g_handshake_stats.failures_state;
 
-    uint64_t t = now_ms();
+    uint64_t t = platform_now_ms();
     for (int i = 0; i < g_liveness_count; i++) {
         if (t - g_liveness[i].last_tick_ms > STALL_THRESHOLD_MS) {
             if (strcmp(g_liveness[i].name, "rx-worker") == 0) snap.rx_thread_stalled++;
@@ -88,21 +104,27 @@ static void sample(void)
     if (snap.rx_thread_stalled || snap.tx_thread_stalled || snap.crypto_thread_stalled)
         printf("[MONITOR] WARNING: thread stall detected\n");
 
-    pthread_mutex_lock(&g_snap_mutex);
+    snap_lock();
     g_snapshot = snap;
-    pthread_mutex_unlock(&g_snap_mutex);
+    snap_unlock();
 }
 
+#ifdef _WIN32
+static DWORD WINAPI monitor_loop(LPVOID arg)
+#else
 static void* monitor_loop(void* arg)
+#endif
 {
     (void)arg;
     while (g_monitor_running) {
         sample();
-        struct timespec ts = { .tv_sec = MONITOR_INTERVAL_MS / 1000,
-                               .tv_nsec = (MONITOR_INTERVAL_MS % 1000) * 1000000 };
-        nanosleep(&ts, NULL);
+        platform_sleep_ms(MONITOR_INTERVAL_MS);
     }
+#ifdef _WIN32
+    return 0;
+#else
     return NULL;
+#endif
 }
 
 int monitor_start(void)
@@ -111,23 +133,41 @@ int monitor_start(void)
     g_monitor_running = 1;
     memset(g_liveness, 0, sizeof(g_liveness));
     g_liveness_count = 0;
+
+#ifdef _WIN32
+    InitializeCriticalSection(&g_snap_mutex);
+    g_monitor_thread = CreateThread(NULL, 0, monitor_loop, NULL, 0, NULL);
+    if (!g_monitor_thread) {
+        g_monitor_running = 0;
+        return -1;
+    }
+#else
     if (pthread_create(&g_monitor_thread, NULL, monitor_loop, NULL) != 0) {
         g_monitor_running = 0;
         return -1;
     }
     pthread_detach(g_monitor_thread);
+#endif
     return 0;
 }
 
 void monitor_stop(void)
 {
     g_monitor_running = 0;
+#ifdef _WIN32
+    if (g_monitor_thread) {
+        WaitForSingleObject(g_monitor_thread, 2000);
+        CloseHandle(g_monitor_thread);
+        g_monitor_thread = NULL;
+    }
+    DeleteCriticalSection(&g_snap_mutex);
+#endif
 }
 
 void monitor_get_snapshot(monitor_snapshot_t* snap)
 {
     if (!snap) return;
-    pthread_mutex_lock(&g_snap_mutex);
+    snap_lock();
     *snap = g_snapshot;
-    pthread_mutex_unlock(&g_snap_mutex);
+    snap_unlock();
 }

@@ -1,6 +1,11 @@
 #pragma once
 #include <stdint.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 #define MAX_ROUTES 16
 #define RELAY_NODE_ID_UNKNOWN 0

@@ -47,6 +47,13 @@
 #define CTRL_DELIVERY_ACK       30
 #define CTRL_READ_ACK           31
 
+/* Group/multi-peer chat opcodes */
+#define CTRL_GROUP_CREATE       32
+#define CTRL_GROUP_JOIN         33
+#define CTRL_GROUP_LEAVE        34
+#define CTRL_GROUP_MSG          35
+#define CTRL_GROUP_LIST         36
+
 #define HS_ERR_NONE             0
 #define HS_ERR_UNSUPPORTED_KEM  1
 #define HS_ERR_BAD_IDENTITY     2

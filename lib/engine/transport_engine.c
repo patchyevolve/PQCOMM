@@ -83,6 +83,25 @@ static int g_initiator_route_sent = 0;
 static abr_ctx_t g_abr_initiator;
 static abr_ctx_t g_abr_responder;
 
+/* file transfer demo state (direct I/O, no file_transfer API) */
+#define DEMO_FILE_PATH "/tmp/ssm_demo_src.bin"
+#define DEMO_FILE_RCV "/tmp/ssm_demo_rcv.bin"
+#define DEMO_FILE_SIZE 1024  /* 1KB - single chunk */
+static int g_ft_sending = 0;
+static uint32_t g_ft_send_offset = 0;
+static uint32_t g_ft_send_chunk_seq = 0;
+static uint32_t g_ft_total_size = 0;
+static uint32_t g_ft_total_chunks = 0;
+static int g_ft_recving = 0;
+static uint32_t g_ft_recv_chunks = 0;
+static uint32_t g_ft_recv_total_chunks = 0;
+static uint32_t g_ft_recv_total_size = 0;
+static uint32_t g_ft_checksum = 0;
+static uint32_t g_ft_recv_checksum = 0;
+static int g_ft_done = 0;
+static int g_ft_send_done = 0;
+static int g_ft_verified = 0;
+
 static void sighandler(int sig)
 {
     (void)sig;
@@ -1144,7 +1163,7 @@ void control_handler_initiator(packet_buf_t* p, void* ctx_ptr)
     }
 
     if (view.channel_id != 1) {
-        if (sess->state == 6)
+        if (sess->state == 6 && view.channel_id == CH_CHAT)
             printf("[INIT CHAT][P%u] %s\n", view.path_idx, (const char*)view.payload);
         pool_return(p);
         return;
@@ -1252,6 +1271,37 @@ void control_handler_initiator(packet_buf_t* p, void* ctx_ptr)
             }
         }
 
+        /* start file transfer demo */
+        if (!g_ft_sending && !g_ft_done) {
+            FILE* f_ft = fopen(DEMO_FILE_PATH, "wb");
+            if (f_ft) {
+                uint8_t pat[1024];
+                uint32_t ck = 0;
+                for (uint32_t off = 0; off < DEMO_FILE_SIZE; off += 1024) {
+                    uint32_t rd = (DEMO_FILE_SIZE - off) > 1024 ? 1024 : (DEMO_FILE_SIZE - off);
+                    for (uint32_t k = 0; k < rd; k++)
+                        pat[k] = (uint8_t)((off + k) & 0xFF);
+                    fwrite(pat, 1, rd, f_ft);
+                    for (uint32_t k = 0; k < rd; k++)
+                        ck = (ck * 31) + pat[k];
+                }
+                fclose(f_ft);
+                g_ft_checksum = ck;
+                g_ft_total_size = DEMO_FILE_SIZE;
+                g_ft_total_chunks = (DEMO_FILE_SIZE + 1023) / 1024;
+                g_ft_sending = 1;
+                g_ft_send_offset = 0;
+                g_ft_send_chunk_seq = 0;
+                g_ft_send_done = 0;
+                g_ft_recving = 0;
+                g_ft_recv_chunks = 0;
+                g_ft_recv_checksum = 0;
+                g_ft_verified = 0;
+                printf("[FILE] created %uB test file, %u chunks, checksum=%u\n",
+                       DEMO_FILE_SIZE, g_ft_total_chunks, g_ft_checksum);
+            }
+        }
+
         uint16_t new_port = sess->local_port + 4;
         port_hop_send_request(sess, ctx->txq, &g_initiator_peer_addr, new_port, ctx->seq_counter);
     }
@@ -1275,6 +1325,48 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
                                           ctx->txq, &g_responder_peer_addr);
             if (ret == 0)
                 printf("[RESP] unknown route packet\n");
+            pool_return(p);
+            return;
+        }
+        if (sess->state == 6 && view.channel_id == CH_FILE && view.length >= 8) {
+            uint32_t fseq, ftotal;
+            memcpy(&fseq, view.payload, 4);
+            memcpy(&ftotal, view.payload + 4, 4);
+            if (!g_ft_recving) {
+                g_ft_recving = 1;
+                g_ft_recv_chunks = 0;
+                g_ft_recv_checksum = 0;
+                g_ft_recv_total_size = ftotal;
+                g_ft_recv_total_chunks = (ftotal + 1023) / 1024;
+                printf("[FILE] receiving %uB in %u chunks\n", ftotal, g_ft_recv_total_chunks);
+                FILE* rf = fopen(DEMO_FILE_RCV, "wb");
+                if (rf) fclose(rf);
+            }
+            FILE* rf = fopen(DEMO_FILE_RCV, "r+b");
+            if (rf) {
+                fseek(rf, fseq * 1024, SEEK_SET);
+                uint32_t rd = view.length - 8;
+                if (rd > 0) {
+                    fwrite(view.payload + 8, 1, rd, rf);
+                    for (uint32_t k = 0; k < rd; k++)
+                        g_ft_recv_checksum = (g_ft_recv_checksum * 31) + view.payload[8 + k];
+                }
+                fclose(rf);
+            }
+            g_ft_recv_chunks++;
+            if (g_ft_recv_chunks == g_ft_recv_total_chunks) {
+                g_ft_done = 1;
+                if (!g_ft_verified) {
+                    g_ft_verified = 1;
+                    printf("[FILE] received %u/%u chunks, checksum=%u (expected=%u)\n",
+                           g_ft_recv_chunks, g_ft_recv_total_chunks,
+                           g_ft_recv_checksum, g_ft_checksum);
+                    if (g_ft_recv_checksum == g_ft_checksum)
+                        printf("[FILE] file OK, checksum MATCH\n");
+                    else
+                        printf("[FILE] file CORRUPT, checksum MISMATCH\n");
+                }
+            }
             pool_return(p);
             return;
         }
@@ -1353,6 +1445,8 @@ void control_handler_responder(packet_buf_t* p, void* ctx_ptr)
                 }
             }
         }
+
+        printf("[FILE] responder ready to receive\n");
     }
 }
 
@@ -1600,6 +1694,55 @@ int transport_engine_run_demo(void)
             heartbeat_tick(g_sess_responder, ctx_responder.txq, ctx_responder.seq_counter, now_ms);
             reconnect_tick(g_sess_initiator, ctx_initiator.txq, ctx_initiator.seq_counter, now_ms);
             reconnect_tick(g_sess_responder, ctx_responder.txq, ctx_responder.seq_counter, now_ms);
+        }
+
+        /* file transfer tick (initiator sends one chunk per tick) */
+        if (g_ft_sending && g_sess_initiator && g_sess_initiator->state == 6 &&
+            g_ft_send_offset < g_ft_total_size) {
+            uint32_t rd = g_ft_total_size - g_ft_send_offset;
+            if (rd > 1024) rd = 1024;
+            uint32_t seq = (*ctx_initiator.seq_counter)++;
+            uint32_t payload_total = 8 + rd;
+            packet_buf_t* fp = pool_get();
+            int sent = 0;
+            if (fp) {
+                uint32_t magic = 0xAABBCCDD;
+                uint8_t ver = 1, fl = 0, ch = CH_FILE;
+                memcpy(fp->data + 0, &magic, 4);
+                memcpy(fp->data + 4, &ver, 1);
+                memcpy(fp->data + 5, &fl, 1);
+                memcpy(fp->data + 6, &g_sess_initiator->session_id, 8);
+                memcpy(fp->data + 14, &ch, 1);
+                memcpy(fp->data + 15, &seq, 4);
+                memcpy(fp->data + 19, &payload_total, 4);
+                memcpy(fp->data + 24, &g_ft_send_chunk_seq, 4);
+                memcpy(fp->data + 28, &g_ft_total_size, 4);
+                FILE* f_rd = fopen(DEMO_FILE_PATH, "rb");
+                if (f_rd) {
+                    fseek(f_rd, g_ft_send_offset, SEEK_SET);
+                    if (fread(fp->data + 32, 1, rd, f_rd) == rd) {
+                        fp->len = 24 + payload_total;
+                        memcpy(fp->addr, &g_initiator_peer_addr, sizeof(g_initiator_peer_addr));
+                        fp->addr_len = sizeof(g_initiator_peer_addr);
+                        if (ring_push(&ctx_initiator.txq->file, fp) == 0) {
+                            g_ft_send_offset += rd;
+                            g_ft_send_chunk_seq++;
+                            sent = 1;
+                        }
+                    }
+                    fclose(f_rd);
+                }
+                if (!sent) pool_return(fp);
+            }
+            if (g_ft_send_offset >= g_ft_total_size) {
+                g_ft_sending = 0;
+                g_ft_send_done = 1;
+                printf("[FILE] initiator sent %u chunks total\n", g_ft_send_chunk_seq);
+            }
+        }
+        /* check if file transfer completed on responder */
+        if (g_ft_send_done && !g_ft_verified && g_ft_done) {
+            printf("[FILE] transfer complete\n");
         }
 
 #ifdef _WIN32

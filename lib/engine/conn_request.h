@@ -2,7 +2,12 @@
 #include "session.h"
 #include "packet.h"
 #include "scheduler.h"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 #define CONN_REQUEST_USERNAME_MAX 32
 #define CONN_REQUEST_DISPLAY_MAX  64

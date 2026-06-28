@@ -4,7 +4,12 @@
 #include "pool.h"
 #include "channel.h"
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 #define REKEY_NONCE_SIZE 8
 

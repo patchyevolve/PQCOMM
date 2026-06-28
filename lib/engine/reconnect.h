@@ -2,7 +2,12 @@
 #include <stdint.h>
 #include "session.h"
 #include "scheduler.h"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 int reconnect_send_request(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter);
 int reconnect_send_ack(session_t* sess, tx_queues_t* txq, uint32_t* seq_counter, struct sockaddr_in6* dest);

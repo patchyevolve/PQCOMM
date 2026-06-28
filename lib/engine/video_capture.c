@@ -2,8 +2,17 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#include <io.h>
+#include <direct.h>
+#define popen _popen
+#define pclose _pclose
+#define mkdir _mkdir
+#else
 #include <unistd.h>
 #include <sys/stat.h>
+#endif
 
 int video_capture_init(video_capture_t* cap, const char* device, int vid_w, int vid_h, int fps)
 {
@@ -14,24 +23,34 @@ int video_capture_init(video_capture_t* cap, const char* device, int vid_w, int 
     cap->height = vid_h > 0 ? vid_h : VIDEO_HEIGHT;
     cap->fps = fps > 0 ? fps : VIDEO_FPS;
 
+    char cmd[512];
+#ifdef _WIN32
+    (void)device;
+    snprintf(cmd, sizeof(cmd),
+             "ffmpeg -hide_banner -loglevel error "
+             "-f dshow -framerate %d -video_size %dx%d -i video=\"%s\" "
+             "-f image2pipe -vcodec mjpeg -qscale:v %d - 2>NUL",
+             cap->fps, cap->width, cap->height,
+             device ? device : "Integrated Webcam",
+             VIDEO_QUALITY);
+    cap->pipe = popen(cmd, "rb");
+#else
     char dev[64];
     if (device && device[0])
         snprintf(dev, sizeof(dev), "%s", device);
     else
         snprintf(dev, sizeof(dev), "/dev/video0");
 
-    /* Use ffmpeg to capture from V4L2 and output JPEG frames via pipe */
-    char cmd[512];
     snprintf(cmd, sizeof(cmd),
              "ffmpeg -hide_banner -loglevel error "
              "-f v4l2 -framerate %d -video_size %dx%d -i %s "
              "-f image2pipe -vcodec mjpeg -qscale:v %d - 2>/dev/null",
              cap->fps, cap->width, cap->height, dev, VIDEO_QUALITY);
-
     cap->pipe = popen(cmd, "r");
+#endif
     if (!cap->pipe) return -1;
     cap->active = 1;
-    snprintf(cap->device, sizeof(cap->device), "%s", dev);
+    if (device) snprintf(cap->device, sizeof(cap->device), "%s", device);
     return 0;
 }
 
@@ -47,9 +66,6 @@ int video_capture_read_jpeg(video_capture_t* cap, uint8_t* buf, uint32_t* len, u
 {
     if (!cap || !cap->active || !cap->pipe || !buf || !len) return -1;
 
-    /* Read JPEG size from pipe (ffmpeg outputs 2-byte size before each frame) */
-    /* Actually ffmpeg image2pipe outputs raw JPEG frames, we need to find JPEG markers */
-    /* Simpler approach: read until we see JPEG end marker FF D9 */
     uint32_t pos = 0;
     while (pos < max_len) {
         size_t r = fread(buf + pos, 1, 1, (FILE*)cap->pipe);
@@ -67,10 +83,15 @@ int video_display_init(video_display_t* disp, const char* device, int w, int h)
 {
     if (!disp) return -1;
     memset(disp, 0, sizeof(*disp));
+    (void)device;
     disp->width = w > 0 ? w : VIDEO_WIDTH;
     disp->height = h > 0 ? h : VIDEO_HEIGHT;
     disp->active = 1;
+#ifdef _WIN32
+    mkdir("C:\\Temp\\ssm_video");
+#else
     mkdir("/tmp/ssm_video", 0700);
+#endif
     return 0;
 }
 
@@ -86,9 +107,15 @@ int video_display_show_jpeg(video_display_t* disp, const uint8_t* jpeg, uint32_t
     if (!disp || !disp->active || !jpeg || !len) return -1;
 
     char path[512];
+#ifdef _WIN32
+    const char* dir = save_dir ? save_dir : "C:\\Temp\\ssm_video";
+    mkdir(dir);
+    snprintf(path, sizeof(path), "%s\\frame_%05d.jpg", dir, frame_num);
+#else
     const char* dir = save_dir ? save_dir : "/tmp/ssm_video";
     mkdir(dir, 0700);
     snprintf(path, sizeof(path), "%s/frame_%05d.jpg", dir, frame_num);
+#endif
 
     FILE* f = fopen(path, "wb");
     if (!f) return -1;

@@ -1,7 +1,13 @@
 #include "kernel_filter.h"
+#include "kernel_filter_bpf.h"
 #include <string.h>
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#endif
 #include "config.h"
 
 kernel_filter_t g_kernel_filter;
@@ -102,4 +108,37 @@ int kernel_filter_check(packet_view_t* p)
 
     kf->passes++;
     return 0;
+}
+
+/* eBPF/XDP integration wrappers */
+
+int kernel_filter_bpf_attach_iface(const char* ifname)
+{
+    if (kernel_filter_bpf_create_map() != 0) return -1;
+    if (kernel_filter_bpf_load() != 0) return -1;
+    if (kernel_filter_bpf_attach(ifname) != 0) return -1;
+    return 0;
+}
+
+int kernel_filter_bpf_detach_iface(void)
+{
+    return kernel_filter_bpf_detach();
+}
+
+int kernel_filter_bpf_sync_state(void)
+{
+    kernel_filter_t* kf = &g_kernel_filter;
+    uint32_t wl = kf->whitelist_count > 0 ? 1 : 0;
+    uint32_t bl = kf->blocklist_count > 0 ? 1 : 0;
+    return kernel_filter_bpf_sync(wl, bl);
+}
+
+int kernel_filter_bpf_loaded(void)
+{
+    return kernel_filter_bpf_is_attached();
+}
+
+void kernel_filter_bpf_cleanup(void)
+{
+    kernel_filter_bpf_shutdown();
 }

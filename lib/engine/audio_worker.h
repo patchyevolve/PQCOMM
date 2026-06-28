@@ -5,7 +5,12 @@
 #include "rx_demux.h"
 #include "session.h"
 #include "channel.h"
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
 #include <netinet/in.h>
+#endif
 
 typedef struct {
     audio_ctx_t codec;

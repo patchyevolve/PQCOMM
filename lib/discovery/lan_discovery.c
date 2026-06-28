@@ -1,10 +1,10 @@
 #include "lan_discovery.h"
 #include "udp.h"
 #include "connection_manager.h"
+#include "platform.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -14,6 +14,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <unistd.h>
 #endif
 
 #define DISCOVERY_MAGIC 0xDEADBEEF
@@ -26,7 +27,8 @@ static uint16_t g_local_transport_port = 0;
 static uint16_t g_discovery_port = 0;
 static char g_local_username[32] = "";
 
-static int g_broadcast_sock = -1;
+static udp_socket_t g_broadcast_sock;
+static int g_broadcast_ok = 0;
 
 uint16_t lan_discovery_get_port(void) { return g_discovery_port; }
 
@@ -41,14 +43,30 @@ int lan_discovery_init(uint16_t disc_port, uint16_t transport_port)
         return -1;
     }
 
-    g_broadcast_sock = (int)socket(AF_INET, SOCK_DGRAM, 0);
-    if (g_broadcast_sock < 0) {
+    /* Create broadcast socket using platform abstraction.
+     * We need a separate socket for sending broadcasts (not bound to a specific port). */
+#ifdef _WIN32
+    SOCKET bfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (bfd == INVALID_SOCKET) {
         udp_socket_close(&g_disc_sock);
         return -1;
     }
     int broadcast_enable = 1;
-    setsockopt(g_broadcast_sock, SOL_SOCKET, SO_BROADCAST,
+    setsockopt(bfd, SOL_SOCKET, SO_BROADCAST,
                (const char*)&broadcast_enable, sizeof(broadcast_enable));
+    g_broadcast_sock.fd = (udp_fd_t)bfd;
+#else
+    int bfd = (int)socket(AF_INET, SOCK_DGRAM, 0);
+    if (bfd < 0) {
+        udp_socket_close(&g_disc_sock);
+        return -1;
+    }
+    int broadcast_enable = 1;
+    setsockopt(bfd, SOL_SOCKET, SO_BROADCAST,
+               (const char*)&broadcast_enable, sizeof(broadcast_enable));
+    g_broadcast_sock.fd = (udp_fd_t)bfd;
+#endif
+    g_broadcast_ok = 1;
 
     g_initialized = 1;
     return 0;
@@ -59,9 +77,9 @@ void lan_discovery_shutdown(void)
     g_running = 0;
     g_initialized = 0;
     udp_socket_close(&g_disc_sock);
-    if (g_broadcast_sock >= 0) {
-        close(g_broadcast_sock);
-        g_broadcast_sock = -1;
+    if (g_broadcast_ok) {
+        udp_socket_close(&g_broadcast_sock);
+        g_broadcast_ok = 0;
     }
 }
 
@@ -85,7 +103,7 @@ void lan_discovery_set_username(const char* username)
 
 static void send_beacon(void)
 {
-    if (g_broadcast_sock < 0) return;
+    if (!g_broadcast_ok) return;
 
     uint32_t uname_len = (uint32_t)strlen(g_local_username);
     if (uname_len > 31) uname_len = 31;
@@ -108,8 +126,13 @@ static void send_beacon(void)
     bc_addr.sin_port = htons(g_discovery_port);
     bc_addr.sin_addr.s_addr = INADDR_BROADCAST;
 
-    sendto(g_broadcast_sock, (const char*)msg, msg_len, 0,
+#ifdef _WIN32
+    sendto((SOCKET)g_broadcast_sock.fd, (const char*)msg, (int)msg_len, 0,
            (const struct sockaddr*)&bc_addr, sizeof(bc_addr));
+#else
+    sendto((int)g_broadcast_sock.fd, msg, msg_len, 0,
+           (const struct sockaddr*)&bc_addr, sizeof(bc_addr));
+#endif
 }
 
 static int try_recv_beacon(void)

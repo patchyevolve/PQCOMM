@@ -1,10 +1,22 @@
 #include "file_transfer.h"
+#include "platform.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#include <sys/stat.h>
+#include <io.h>
+#include <direct.h>
+#define stat _stat
+#define unlink _unlink
+#define rename _rename
+#define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+#else
 #include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
+#endif
 
 uint32_t file_checksum(const uint8_t* data, uint32_t len)
 {
@@ -38,6 +50,9 @@ int file_send_start(file_transfer_ctx_t* ft, const char* filepath)
     snprintf(s->path, sizeof(s->path), "%s", filepath);
 
     const char* basename = strrchr(filepath, '/');
+#ifdef _WIN32
+    if (!basename) basename = strrchr(filepath, '\\');
+#endif
     basename = basename ? basename + 1 : filepath;
     snprintf(s->meta.filename, sizeof(s->meta.filename), "%s", basename);
     s->meta.total_size = (uint32_t)st.st_size;
@@ -116,7 +131,13 @@ int file_recv_chunk(file_transfer_ctx_t* ft, int recv_idx, const uint8_t* data, 
     if (!r->active) return -1;
     if (chunk_seq >= r->meta.total_chunks) return -1;
     if (!r->path[0]) {
+#ifdef _WIN32
+        snprintf(r->path, sizeof(r->path), "%s\\ssm_file_%s.part",
+                 getenv("TEMP") ? getenv("TEMP") : "C:\\Windows\\Temp",
+                 r->meta.filename);
+#else
         snprintf(r->path, sizeof(r->path), "/tmp/ssm_file_%s.part", r->meta.filename);
+#endif
     }
     FILE* f = fopen(r->path, "r+b");
     if (!f) {

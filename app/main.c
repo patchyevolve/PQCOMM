@@ -7,16 +7,19 @@
 #include "secure_store.h"
 #include "lan_discovery.h"
 #include "connection_manager.h"
+#include "group.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include <unistd.h>
-#include <arpa/inet.h>
 #include <time.h>
 #include <signal.h>
+#ifndef _WIN32
+#include <unistd.h>
+#include <arpa/inet.h>
 #include <syslog.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#endif
 
 static int g_transport_started = 0;
 
@@ -102,6 +105,9 @@ static int run_tui(int argc, char** argv)
     if (existing_identity) {
         start_transport(&tui, argc, argv);
     }
+
+    /* Initialize group system */
+    group_init();
 
     tui_render(&tui);
     int frame = 0;
@@ -236,6 +242,94 @@ static int run_tui(int argc, char** argv)
 
         /* poll input */
         int input = tui_input_poll(&tui, 200);
+
+        /* Handle mouse clicks */
+        if (input >= -202 && input <= -98 && tui.mouse_event) {
+            int mx = tui.mouse_last_x;
+            int my = tui.mouse_last_y;
+            tui.mouse_event = 0;
+
+            if (input <= -100 && input >= -102) {
+                /* Mouse click (left/middle/right) */
+                int btn = -(input + 100); /* 0=left, 1=middle, 2=right */
+
+                if (tui.screen == SCREEN_PEER_LIST && btn == 0) {
+                    /* Click on peer list — calculate which peer */
+                    int row = my - 4; /* offset for topbar + header */
+                    if (row >= 0 && row < tui.peer_count - tui.peer_scroll) {
+                        int idx = tui.peer_scroll + row;
+                        if (idx < tui.peer_count) {
+                            tui.peer_selected = idx;
+                            /* Auto-select peer */
+                            peer_entry_t* p = &tui.peers[idx];
+                            if (!p->is_connected) {
+                                transport_send_connect_request(p->addr, p->port,
+                                                                tui.username, tui.display_name);
+                                tui.screen = SCREEN_CHAT;
+                                snprintf(tui.chat_partner, sizeof(tui.chat_partner),
+                                         "%s", p->username[0] ? p->username : p->addr);
+                                tui_add_chat(&tui, "Connection request sent...", 0, 0);
+                            } else {
+                                tui.screen = SCREEN_CHAT;
+                                snprintf(tui.chat_partner, sizeof(tui.chat_partner),
+                                         "%s", p->username[0] ? p->username : p->addr);
+                            }
+                            tui.unread_count = 0;
+                            tui.dirty = 1;
+                        }
+                    }
+                } else if (tui.screen == SCREEN_GROUP && btn == 0) {
+                    /* Click on group screen panels */
+                    int sw = 20;
+                    if (sw > tui.width / 4) sw = tui.width / 4;
+                    if (sw < 12) sw = 12;
+                    int mw = 20;
+                    if (mw > tui.width / 4) mw = tui.width / 4;
+                    if (mw < 12) mw = 12;
+
+                    if (mx <= sw) {
+                        tui.group_focus = GROUP_FOCUS_ROOMS;
+                    } else if (mx >= tui.width - mw) {
+                        tui.group_focus = GROUP_FOCUS_MEMBERS;
+                    } else {
+                        tui.group_focus = GROUP_FOCUS_CHAT;
+                    }
+                    tui.dirty = 1;
+                }
+            } else if (input <= -199 && input >= -201) {
+                /* Scroll wheel */
+                int dir = (input == -199) ? 1 : -1; /* -199=down, -201=up */
+
+                if (tui.screen == SCREEN_PEER_LIST) {
+                    if (dir > 0 && tui.peer_selected < tui.peer_count - 1) {
+                        tui.peer_selected++;
+                        if (tui.peer_selected - tui.peer_scroll >= tui.height - 5)
+                            tui.peer_scroll++;
+                        tui.dirty = 1;
+                    } else if (dir < 0 && tui.peer_selected > 0) {
+                        tui.peer_selected--;
+                        if (tui.peer_selected < tui.peer_scroll)
+                            tui.peer_scroll--;
+                        tui.dirty = 1;
+                    }
+                } else if (tui.screen == SCREEN_GROUP && tui.group_focus == GROUP_FOCUS_ROOMS) {
+                    int count;
+                    group_get_rooms(&count);
+                    if (dir > 0 && tui.group_room_scroll < count - 1) tui.group_room_scroll++;
+                    else if (dir < 0 && tui.group_room_scroll > 0) tui.group_room_scroll--;
+                    tui.dirty = 1;
+                } else if (tui.screen == SCREEN_GROUP && tui.group_focus == GROUP_FOCUS_MEMBERS) {
+                    group_room_t* room = tui.current_room[0] ? group_find(tui.current_room) : NULL;
+                    if (room) {
+                        if (dir > 0 && tui.group_member_scroll < room->member_count - 1)
+                            tui.group_member_scroll++;
+                        else if (dir < 0 && tui.group_member_scroll > 0)
+                            tui.group_member_scroll--;
+                        tui.dirty = 1;
+                    }
+                }
+            }
+        }
         if (input >= 1 && tui.input_len > 0) {
             tui.input_buf[tui.input_len] = '\0';
             if (strncmp(tui.input_buf, "/connect ", 9) == 0) {
@@ -328,6 +422,54 @@ static int run_tui(int argc, char** argv)
                 tui.dirty = 1;
                 goto done_input;
             }
+            if (strncmp(tui.input_buf, "/room ", 6) == 0) {
+                char cmd[32] = {0};
+                char name[32] = {0};
+                int n = sscanf(tui.input_buf + 6, "%31s %31s", cmd, name);
+                if (n >= 1 && strcmp(cmd, "list") == 0) {
+                    int rcount;
+                    group_get_rooms(&rcount);
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Rooms: %d total", rcount);
+                    if (tui.screen == SCREEN_GROUP)
+                        group_add_message(tui.current_room, "system", msg, 0);
+                    else
+                        tui_add_chat(&tui, msg, 0, 0);
+                } else if (n >= 2 && strcmp(cmd, "create") == 0) {
+                    if (group_create(name, "") == 0) {
+                        snprintf(tui.current_room, sizeof(tui.current_room), "%s", name);
+                        tui.screen = SCREEN_GROUP;
+                        tui.group_focus = GROUP_FOCUS_CHAT;
+                        char msg[128];
+                        snprintf(msg, sizeof(msg), "Room #%s created", name);
+                        group_add_message(name, "system", msg, 0);
+                    } else {
+                        tui_add_chat(&tui, "Room creation failed (may already exist)", 0, 0);
+                    }
+                } else if (n >= 2 && strcmp(cmd, "join") == 0) {
+                    group_room_t* r = group_find(name);
+                    if (r) {
+                        snprintf(tui.current_room, sizeof(tui.current_room), "%s", name);
+                        tui.screen = SCREEN_GROUP;
+                        tui.group_focus = GROUP_FOCUS_CHAT;
+                    } else {
+                        tui_add_chat(&tui, "Room not found", 0, 0);
+                    }
+                } else if (n >= 2 && strcmp(cmd, "leave") == 0) {
+                    group_room_t* r = group_find(name);
+                    if (r) {
+                        group_add_message(name, "system", "You left the room", 0);
+                        if (strcmp(tui.current_room, name) == 0)
+                            tui.current_room[0] = '\0';
+                    }
+                } else {
+                    tui_add_chat(&tui, "Usage: /room <create|join|leave|list> [name]", 0, 0);
+                }
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
             if (strncmp(tui.input_buf, "/import ", 8) == 0 && tui.identity_ready) {
                 char hex[65] = {0};
                 if (sscanf(tui.input_buf + 8, "%64s", hex) == 1 &&
@@ -360,6 +502,28 @@ static int run_tui(int argc, char** argv)
             tui.dirty = 1;
             if (!g_transport_started)
                 start_transport(&tui, argc, argv);
+        } else if (input == 1 && tui.screen == SCREEN_GROUP && tui.group_focus == GROUP_FOCUS_CHAT && tui.current_room[0]) {
+            /* Enter pressed in group chat — send to current room */
+            tui.input_buf[input] = '\0';
+            group_add_message(tui.current_room, tui.username, tui.input_buf, 0);
+            /* Broadcast to connected peers in room */
+            group_room_t* room = group_find(tui.current_room);
+            if (room) {
+                for (int i = 0; i < room->member_count; i++) {
+                    group_member_t* m = &room->members[i];
+                    for (int p = 0; p < tui.peer_count; p++) {
+                        if (strcmp(tui.peers[p].addr, m->addr) == 0 &&
+                            tui.peers[p].port == m->port &&
+                            tui.peers[p].is_connected) {
+                            transport_send_chat(tui.input_buf);
+                            break;
+                        }
+                    }
+                }
+            }
+            tui.input_len = 0;
+            tui.input_pos = 0;
+            tui.dirty = 1;
         } else if (input == 1 && tui.conn_info.state == CONN_LOCKED) {
             /* Enter pressed in chat with non-empty input — send chat */
             tui.input_buf[input] = '\0';
@@ -499,8 +663,9 @@ done_input:
     return 0;
 }
 
+#ifndef _WIN32
 /* ================================================================
- * Daemon mode — headless background operation
+ * Daemon mode — headless background operation (POSIX only)
  * ================================================================ */
 
 static volatile int g_daemon_running = 1;
@@ -517,23 +682,18 @@ static void daemonize(void)
     pid_t pid = fork();
     if (pid < 0) exit(1);
     if (pid > 0) {
-        /* Write PID file */
         FILE* pf = fopen("/tmp/pqcommd.pid", "w");
         if (pf) { fprintf(pf, "%d\n", pid); fclose(pf); }
         printf("Daemon started, PID %d\n", pid);
         exit(0);
     }
-    /* Child continues */
     setsid();
     signal(SIGCHLD, SIG_IGN);
     signal(SIGHUP, SIG_IGN);
-
-    /* Close stdin/stdout/stderr and reopen to /dev/null */
     close(0); close(1); close(2);
     open("/dev/null", O_RDONLY);
     open("/dev/null", O_WRONLY);
     open("/dev/null", O_WRONLY);
-
     chdir("/tmp");
 }
 
@@ -542,7 +702,6 @@ static int run_daemon(int argc, char** argv)
     openlog("pqcommd", LOG_PID | LOG_CONS, LOG_DAEMON);
     syslog(LOG_INFO, "pqcommd starting");
 
-    /* Set up identity */
     identity_t id;
     const char* config_dir = getenv("HOME");
     char path[512];
@@ -562,7 +721,6 @@ static int run_daemon(int argc, char** argv)
         return 1;
     }
 
-    /* Start transport */
     transport_config_t config;
     memset(&config, 0, sizeof(config));
     config.local_port = 9001;
@@ -594,16 +752,13 @@ static int run_daemon(int argc, char** argv)
     lan_discovery_set_username(id.username);
     syslog(LOG_INFO, "transport initialized, port %d", config.local_port);
 
-    /* Signal handling */
     signal(SIGTERM, daemon_signal_handler);
     signal(SIGINT, daemon_signal_handler);
 
-    /* Headless event loop */
     while (g_daemon_running) {
         transport_event_t ev;
         while (transport_poll_event(&ev) > 0) {
             if (ev.type == EVENT_CONNECT_REQUEST) {
-                /* Auto-accept in daemon mode */
                 transport_accept_connection(ev.data.conn_req.addr,
                                             ev.data.conn_req.port);
                 syslog(LOG_INFO, "auto-accepted connection from %s:%d (%s)",
@@ -629,29 +784,27 @@ static int run_daemon(int argc, char** argv)
             }
         }
 
-        /* Listen for connections */
         lan_discovery_trigger_scan();
         uint64_t now_ms = (uint64_t)time(NULL) * 1000;
         connection_manager_mark_stale(now_ms, 30000);
 
-        usleep(200000); /* 200ms sleep */
+        usleep(200000);
     }
 
     syslog(LOG_INFO, "pqcommd shutting down");
     transport_shutdown();
     closelog();
-
-    /* Remove PID file */
     unlink("/tmp/pqcommd.pid");
-
     return 0;
 }
+#endif /* _WIN32 */
 
 int main(int argc, char** argv)
 {
     if (argc > 1 && strcmp(argv[1], "--tui") == 0)
         return run_tui(argc, argv);
 
+#ifndef _WIN32
     if (argc > 1 && strcmp(argv[1], "--daemon") == 0) {
         if (argc > 2 && strcmp(argv[2], "--foreground") == 0) {
             return run_daemon(argc, argv);
@@ -659,6 +812,7 @@ int main(int argc, char** argv)
         daemonize();
         return run_daemon(argc, argv);
     }
+#endif
 
     return transport_engine_run_demo();
 }

@@ -5,6 +5,10 @@ project(transport C)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+if(MSVC)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_WARNINGS)
+endif()
+
 find_package(MbedTLS CONFIG REQUIRED)
 find_package(liboqs CONFIG REQUIRED)
 
@@ -62,17 +66,20 @@ set(LIB_SRC
     lib/engine/video_capture.c
     lib/engine/video_worker.c
     lib/engine/file_transfer.c
+    lib/group/group.c
 )
 
 if (WIN32)
     list(APPEND LIB_SRC
         lib/core/udp_win.c
         lib/core/io_wait_win.c
+        lib/core/io_poll_win.c
     )
 else()
     list(APPEND LIB_SRC
         lib/core/udp_posix.c
         lib/core/io_wait_posix.c
+        lib/layers/kernel_filter_bpf.c
     )
 endif()
 
@@ -98,7 +105,6 @@ target_link_libraries(transport_core PUBLIC
 target_include_directories(transport_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/api>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/core>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/core>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/crypto>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/handshake>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/layers>
@@ -108,6 +114,7 @@ target_include_directories(transport_core PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/discovery>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/relay>
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/identity>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/lib/group>
     ${OPUS_INCLUDE_DIRS}
 )
 
@@ -155,6 +162,8 @@ add_executable(test_runner
     tests/test_load.c
     tests/test_property.c
     tests/test_benchmark.c
+    tests/test_group.c
+    tests/test_kernel_filter_bpf.c
 )
 
 target_link_libraries(test_runner PRIVATE transport_core m)

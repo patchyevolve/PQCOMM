@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <errno.h>
 
 static uint8_t g_identity_key[IDENTITY_KEY_SIZE];
 static int g_key_initialized = 0;
@@ -49,7 +50,9 @@ int secure_store_init(void)
     /* Linux-only: prevent key from appearing in coredumps */
 #ifdef __linux__
     if (madvise(g_identity_key, IDENTITY_KEY_SIZE, MADV_DONTDUMP) != 0) {
-        perror("[SECURE_STORE] madvise DONTDUMP failed");
+        if (errno != EPERM && errno != EACCES && errno != EINVAL) {
+            perror("[SECURE_STORE] madvise DONTDUMP failed");
+        }
     }
 #endif
 

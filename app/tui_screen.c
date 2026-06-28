@@ -1,192 +1,336 @@
-#include "tui_screen.h"
+#include "tui.h"
+#include "tui_input.h"
 #include "tui_panels.h"
+#include "group.h"
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
+#include <stdarg.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#include <termios.h>
 #include <sys/ioctl.h>
 #include <signal.h>
-#include <time.h>
+#endif
 
-static volatile sig_atomic_t g_resize_flag = 0;
-static tui_t* g_tui_global = NULL;
+static int g_raw_mode = 0;
+#ifdef _WIN32
+static HANDLE g_hStdout = NULL;
+static HANDLE g_hStdin = NULL;
+static DWORD g_orig_out = 0, g_orig_in = 0;
+#else
+static struct termios g_orig_term;
+static struct winsize g_ws;
+#endif
 
-static void sigwinch_handler(int sig)
+void tui_raw_mode_enter(void)
 {
-    (void)sig;
-    g_resize_flag = 1;
-}
-
-static void sigcont_handler(int sig)
-{
-    (void)sig;
-    if (g_tui_global) {
-        /* re-enter raw mode after SIGCONT (Ctrl+Z resume) */
-        struct termios raw = g_tui_global->orig_termios;
-        raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
-        raw.c_oflag &= ~(OPOST);
-        raw.c_cflag |= (CS8);
-        raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-        raw.c_cc[VMIN] = 0;
-        raw.c_cc[VTIME] = 1;
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-        g_tui_global->dirty = 1;
+    if (g_raw_mode) return;
+#ifdef _WIN32
+    g_hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+    g_hStdin = GetStdHandle(STD_INPUT_HANDLE);
+    if (g_hStdout && g_hStdout != INVALID_HANDLE_VALUE) {
+        GetConsoleMode(g_hStdout, &g_orig_out);
+        DWORD mode = g_orig_out;
+        mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(g_hStdout, mode);
     }
-}
-
-void tui_init(tui_t* t)
-{
-    memset(t, 0, sizeof(*t));
-    t->width = 80;
-    t->height = 24;
-    t->dirty = 1;
-    t->screen = SCREEN_LOGIN;
-    t->running = 1;
-    t->login_field = 0;
-    t->input_active = 1;
-    t->typing_tick = 0;
-    g_tui_global = t;
-}
-
-void tui_term_init(tui_t* t)
-{
-    /* save original and set raw mode */
-    tcgetattr(STDIN_FILENO, &t->orig_termios);
-    struct termios raw = t->orig_termios;
-    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    if (g_hStdin && g_hStdin != INVALID_HANDLE_VALUE) {
+        GetConsoleMode(g_hStdin, &g_orig_in);
+        DWORD mode = g_orig_in;
+        mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
+        mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+        SetConsoleMode(g_hStdin, mode);
+    }
+#else
+    struct termios raw;
+    tcgetattr(STDIN_FILENO, &g_orig_term);
+    raw = g_orig_term;
+    raw.c_lflag &= ~(ECHO | ICANON | ISIG | IEXTEN);
+    raw.c_iflag &= ~(IXON | ICRNL | ISTRIP | BRKINT);
     raw.c_oflag &= ~(OPOST);
-    raw.c_cflag |= (CS8);
-    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
-    raw.c_cc[VMIN] = 0;
-    raw.c_cc[VTIME] = 1;
+    raw.c_cc[VMIN] = 1; raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-    t->term_raw = 1;
+#endif
+    g_raw_mode = 1;
+}
 
-    /* SIGWINCH handler for resize */
+void tui_raw_mode_exit(void)
+{
+    if (!g_raw_mode) return;
+#ifdef _WIN32
+    if (g_hStdout && g_hStdout != INVALID_HANDLE_VALUE)
+        SetConsoleMode(g_hStdout, g_orig_out);
+    if (g_hStdin && g_hStdin != INVALID_HANDLE_VALUE)
+        SetConsoleMode(g_hStdin, g_orig_in);
+#else
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_orig_term);
+#endif
+    g_raw_mode = 0;
+}
+
+int tui_terminal_width(void)
+{
+#ifdef _WIN32
+    if (!g_hStdout || g_hStdout == INVALID_HANDLE_VALUE) return 80;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(g_hStdout, &csbi))
+        return csbi.srWindow.Right - csbi.srWindow.Left + 1;
+    return 80;
+#else
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &g_ws) == 0 && g_ws.ws_col > 0)
+        return g_ws.ws_col;
+    return 80;
+#endif
+}
+
+int tui_terminal_height(void)
+{
+#ifdef _WIN32
+    if (!g_hStdout || g_hStdout == INVALID_HANDLE_VALUE) return 24;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(g_hStdout, &csbi))
+        return csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    return 24;
+#else
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &g_ws) == 0 && g_ws.ws_row > 0)
+        return g_ws.ws_row;
+    return 24;
+#endif
+}
+
+void tui_write(const char* s)
+{
+#ifdef _WIN32
+    if (g_hStdout && g_hStdout != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteConsole(g_hStdout, s, (DWORD)strlen(s), &written, NULL);
+    }
+#else
+    write(STDOUT_FILENO, s, strlen(s));
+#endif
+}
+
+void tui_printf(const char* fmt, ...)
+{
+    char buf[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    tui_write(buf);
+}
+
+void tui_clear(void)
+{
+    tui_write("\033[2J\033[3J\033[H");
+}
+
+void tui_move_cursor(int x, int y)
+{
+    tui_printf("\033[%d;%dH", y, x);
+}
+
+void tui_cursor_save(void)
+{
+    tui_write("\0337");
+}
+
+void tui_cursor_restore(void)
+{
+    tui_write("\0338");
+}
+
+void tui_cursor_hide(void)
+{
+    tui_write("\033[?25l");
+}
+
+void tui_cursor_show(void)
+{
+    tui_write("\033[?25h");
+}
+
+void tui_set_bg(int color)
+{
+    tui_printf("\033[48;5;%dm", color);
+}
+
+void tui_set_fg(int color)
+{
+    tui_printf("\033[38;5;%dm", color);
+}
+
+void tui_reset_attr(void)
+{
+    tui_write("\033[0m");
+}
+
+void tui_set_bold(void)
+{
+    tui_write("\033[1m");
+}
+
+void tui_set_dim(void)
+{
+    tui_write("\033[2m");
+}
+
+void tui_erase_line(void)
+{
+    tui_write("\033[2K\r");
+}
+
+
+
+#ifndef _WIN32
+static void tui_sigwinch_handler(int sig)
+{
+    (void)sig;
+}
+#endif
+
+void tui_screen_setup(void)
+{
+#ifdef _WIN32
+    g_hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
+    g_hStdin = GetStdHandle(STD_INPUT_HANDLE);
+#else
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = sigwinch_handler;
+    sa.sa_handler = tui_sigwinch_handler;
+    sa.sa_flags = SA_RESTART;
     sigaction(SIGWINCH, &sa, NULL);
-
-    /* SIGCONT handler for Ctrl+Z resume */
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = sigcont_handler;
     sigaction(SIGCONT, &sa, NULL);
-
-    /* hide cursor, clear screen */
-    write(STDOUT_FILENO, "\033[?25l\033[2J\033[H", 12);
+#endif
+    tui_raw_mode_enter();
+    tui_clear();
+    tui_cursor_hide();
 }
 
-void tui_term_restore(void)
+void tui_screen_restore(void)
 {
-    write(STDOUT_FILENO, "\033[2J\033[H\033[?25h", 12);
+    tui_cursor_show();
+    tui_clear();
+    tui_raw_mode_exit();
 }
 
 void tui_suspend(tui_t* t)
 {
-    /* restore terminal before suspending */
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &t->orig_termios);
-    t->term_raw = 0;
-    write(STDOUT_FILENO, "\033[?25h", 5);
+    (void)t;
+#ifndef _WIN32
+    tui_cursor_show();
+    tui_raw_mode_exit();
     raise(SIGTSTP);
+    tui_raw_mode_enter();
+    tui_cursor_hide();
+    tui_clear();
+    t->dirty = 1;
+#endif
+}
+
+/* ================================================================
+ * Legacy API wrappers (used by main.c)
+ * ================================================================ */
+
+void tui_init(tui_t* t)
+{
+    memset(t, 0, sizeof(*t));
+    t->running = 1;
+    t->dirty = 1;
+    t->screen = SCREEN_LOGIN;
+    t->login_field = 0;
+    t->input_active = 1;
+    t->peer_scroll = 0;
+    t->peer_selected = 0;
+}
+
+void tui_term_init(tui_t* t)
+{
+    (void)t;
+    tui_screen_setup();
+    tui_input_init();
+}
+
+void tui_term_restore(void)
+{
+    tui_screen_restore();
+}
+
+void tui_shutdown(tui_t* t)
+{
+    (void)t;
+    tui_input_disable_mouse();
+    tui_term_restore();
+}
+
+void tui_render(tui_t* t)
+{
+    t->width = tui_terminal_width();
+    t->height = tui_terminal_height();
+    char buf[65536];
+    int pos = 0;
+    int max = (int)sizeof(buf);
+    pos += tui_panel_topbar(t, buf + pos, max - pos);
+    switch (t->screen) {
+        case SCREEN_LOGIN:
+            pos += tui_panel_login(t, buf + pos, max - pos);
+            break;
+        case SCREEN_PEER_LIST:
+            pos += tui_panel_peer_list(t, buf + pos, max - pos);
+            break;
+        case SCREEN_CHAT:
+            pos += tui_panel_chat(t, buf + pos, max - pos);
+            break;
+        case SCREEN_GROUP:
+            pos += tui_panel_room_sidebar(t, buf + pos, max - pos);
+            pos += tui_panel_group_chat(t, buf + pos, max - pos);
+            pos += tui_panel_member_sidebar(t, buf + pos, max - pos);
+            break;
+    }
+    pos += tui_panel_request_popup(t, buf + pos, max - pos);
+    pos += tui_panel_call_popup(t, buf + pos, max - pos);
+    pos += tui_panel_statusbar(t, buf + pos, max - pos);
+    if (pos > 0) tui_write(buf);
+    if (pos > max) tui_write("[render truncated]");
+    t->dirty = 0;
 }
 
 void tui_add_chat(tui_t* t, const char* text, uint16_t port, int is_self)
 {
-    if (t->chat_count < TUI_MAX_CHAT_LINES) {
-        chat_line_t* cl = &t->chat_lines[t->chat_count++];
-        size_t len = strlen(text);
-        if (len > sizeof(cl->text) - 1) len = sizeof(cl->text) - 1;
-        memcpy(cl->text, text, len);
-        cl->text[len] = '\0';
-        cl->sender_port = port;
-        cl->is_self = is_self;
-        cl->timestamp = time(NULL);
-        cl->seq = 0;
-        cl->status = 0;
+    if (t->chat_count >= TUI_MAX_CHAT_LINES) {
+        memmove(t->chat_lines, t->chat_lines + 1,
+                (size_t)(TUI_MAX_CHAT_LINES - 1) * sizeof(chat_line_t));
+        t->chat_count = TUI_MAX_CHAT_LINES - 1;
     }
+    chat_line_t* cl = &t->chat_lines[t->chat_count++];
+    snprintf(cl->text, sizeof(cl->text), "%s", text);
+    cl->sender_port = port;
+    cl->is_self = is_self;
+    cl->line = t->chat_count;
+    cl->timestamp = time(NULL);
+    cl->status = is_self ? 0 : 1;
+    cl->seq = 0;
     t->dirty = 1;
 }
 
 void tui_add_chat_with_seq(tui_t* t, const char* text, uint16_t port, int is_self, uint32_t seq)
 {
-    if (t->chat_count < TUI_MAX_CHAT_LINES) {
-        chat_line_t* cl = &t->chat_lines[t->chat_count++];
-        size_t len = strlen(text);
-        if (len > sizeof(cl->text) - 1) len = sizeof(cl->text) - 1;
-        memcpy(cl->text, text, len);
-        cl->text[len] = '\0';
-        cl->sender_port = port;
-        cl->is_self = is_self;
-        cl->timestamp = time(NULL);
-        cl->seq = seq;
-        cl->status = 0;
-    }
-    t->dirty = 1;
+    tui_add_chat(t, text, port, is_self);
+    if (t->chat_count > 0)
+        t->chat_lines[t->chat_count - 1].seq = seq;
 }
 
 void tui_update_info(tui_t* t, conn_info_t* info)
 {
-    if (memcmp(&t->conn_info, info, sizeof(*info)) != 0) {
-        memcpy(&t->conn_info, info, sizeof(*info));
-        t->dirty = 1;
-    }
+    memcpy(&t->conn_info, info, sizeof(conn_info_t));
 }
 
 void tui_add_log(tui_t* t, const char* msg)
 {
     if (t->log_line < 32)
         snprintf(t->log[t->log_line++], 256, "%s", msg);
-}
-
-void tui_shutdown(tui_t* t)
-{
-    if (t->term_raw) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &t->orig_termios);
-        t->term_raw = 0;
-    }
-    g_tui_global = NULL;
-    tui_term_restore();
-}
-
-static void get_term_size(int* w, int* h)
-{
-    struct winsize ws;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
-        *w = ws.ws_col;
-        *h = ws.ws_row;
-    }
-}
-
-void tui_render(tui_t* t)
-{
-    if (!t->dirty && !g_resize_flag) return;
-    if (g_resize_flag) {
-        g_resize_flag = 0;
-        t->dirty = 1;
-    }
-    t->dirty = 0;
-    get_term_size(&t->width, &t->height);
-    if (t->width < 60) t->width = 60;
-    if (t->height < 16) t->height = 16;
-
-    char buf[8192];
-    int n = 0;
-    n += snprintf(buf + n, sizeof(buf) - (size_t)n, "\033[H\033[J");
-
-    n += tui_panel_topbar(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-
-    if (t->screen == SCREEN_LOGIN) {
-        n += tui_panel_login(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-    } else if (t->screen == SCREEN_PEER_LIST) {
-        n += tui_panel_peer_list(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-        if (t->show_conn_popup)
-            n += tui_panel_request_popup(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-    } else if (t->screen == SCREEN_CHAT) {
-        n += tui_panel_chat(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-        if (t->show_call_popup)
-            n += tui_panel_call_popup(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-    }
-
-    n += tui_panel_statusbar(t, buf + n, (int)(sizeof(buf) - (size_t)n));
-    write(STDOUT_FILENO, buf, (size_t)n);
 }

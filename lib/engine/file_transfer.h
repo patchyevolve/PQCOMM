@@ -4,7 +4,7 @@
 #define FILE_CHUNK_SIZE 1024
 #define FILE_NAME_MAX 256
 #define FILE_PATH_MAX 512
-#define FILE_MAX_CHUNKS 65536
+#define FILE_MAX_CHUNKS 4194304
 
 typedef struct {
     char filename[FILE_NAME_MAX];

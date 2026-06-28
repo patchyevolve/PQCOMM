@@ -8,3 +8,6 @@ int tui_panel_chat(tui_t* t, char* buf, int max);
 int tui_panel_request_popup(tui_t* t, char* buf, int max);
 int tui_panel_call_popup(tui_t* t, char* buf, int max);
 int tui_panel_statusbar(tui_t* t, char* buf, int max);
+int tui_panel_room_sidebar(tui_t* t, char* buf, int max);
+int tui_panel_group_chat(tui_t* t, char* buf, int max);
+int tui_panel_member_sidebar(tui_t* t, char* buf, int max);

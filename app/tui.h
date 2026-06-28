@@ -1,10 +1,11 @@
 #pragma once
 #include <time.h>
-#include <termios.h>
 #include "transport_api.h"
 #include "identity.h"
 
-typedef enum { SCREEN_LOGIN, SCREEN_PEER_LIST, SCREEN_CHAT } screen_t;
+typedef enum { SCREEN_LOGIN, SCREEN_PEER_LIST, SCREEN_CHAT, SCREEN_GROUP } screen_t;
+
+typedef enum { GROUP_FOCUS_ROOMS = 0, GROUP_FOCUS_CHAT = 1, GROUP_FOCUS_MEMBERS = 2 } group_focus_t;
 
 typedef struct {
     char text[1024];
@@ -12,7 +13,7 @@ typedef struct {
     int is_self;
     uint32_t line;
     time_t timestamp;
-    uint8_t status; /* 0=sent, 1=delivered, 2=read */
+    uint8_t status;
     uint32_t seq;
 } chat_line_t;
 
@@ -24,8 +25,8 @@ typedef enum {
     TUI_ACTION_NONE = 0,
     TUI_ACTION_QUIT,
     TUI_ACTION_LOGIN_SUBMIT,
-    TUI_ACTION_PEER_SELECT,   /* data = peer index */
-    TUI_ACTION_CHAT_SEND,     /* data = input length */
+    TUI_ACTION_PEER_SELECT,
+    TUI_ACTION_CHAT_SEND,
     TUI_ACTION_CONN_ACCEPT,
     TUI_ACTION_CONN_DECLINE,
     TUI_ACTION_CALL_ACCEPT,
@@ -41,11 +42,6 @@ typedef struct {
     int dirty;
     int resize_dirty;
 
-    /* terminal */
-    struct termios orig_termios;
-    int term_raw;
-
-    /* screen state */
     screen_t screen;
     int running;
 
@@ -58,7 +54,7 @@ typedef struct {
     /* login screen */
     char login_username[32];
     char login_display[64];
-    int login_field; /* 0=username, 1=display */
+    int login_field;
     int login_cursor;
     int login_error;
 
@@ -74,13 +70,13 @@ typedef struct {
     uint16_t conn_req_port;
     char conn_req_username[32];
     char conn_req_display[64];
-    int conn_popup_selection; /* 0=accept, 1=decline */
+    int conn_popup_selection;
 
     /* incoming call popup */
     int show_call_popup;
     char call_req_peer[32];
-    int call_popup_type; /* 0=audio, 1=video */
-    int call_popup_selection; /* 0=accept, 1=decline */
+    int call_popup_type;
+    int call_popup_selection;
 
     /* chat */
     int chat_scroll;
@@ -89,19 +85,34 @@ typedef struct {
     char chat_partner[32];
     conn_info_t conn_info;
 
+    /* group chat */
+    char current_room[32];
+    int group_focus;
+    int group_room_scroll;
+    int group_member_scroll;
+    int group_chat_scroll;
+    int group_dirty;
+
     /* input */
     char input_buf[TUI_INPUT_BUF];
     int input_len;
     int input_pos;
-    int input_active; /* 0=idle, 1=typing */
+    int input_active;
 
     /* typing indicator */
     char typing_peer[32];
-    int typing_tick;    /* decrements each frame, show indicator while > 0 */
-    int typing_flag;    /* set to 1 when user types, main loop sends notification */
+    int typing_tick;
+    int typing_flag;
 
     /* unread count */
     int unread_count;
+
+    /* mouse state */
+    int mouse_event;
+    int mouse_last_x;
+    int mouse_last_y;
+    int mouse_btn;
+    int mouse_scroll;
 
     /* status */
     int log_line;

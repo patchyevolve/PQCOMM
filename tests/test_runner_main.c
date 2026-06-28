@@ -1,6 +1,13 @@
 #include <stdio.h>
 #include <string.h>
 
+/* Test return code convention:
+ *   0       = PASS
+ *   TEST_SKIP = SKIP (test skipped, not a failure)
+ *   other   = FAIL
+ */
+#define TEST_SKIP 42
+
 extern int test_fec_recovery(void);
 extern int test_fec_no_recovery_all_present(void);
 extern int test_route_table_add_find(void);
@@ -16,6 +23,10 @@ extern int test_kf_whitelist(void);
 extern int test_kf_blocklist(void);
 extern int test_kf_size(void);
 extern int test_kf_port(void);
+extern int test_kf_bpf_map(void);
+extern int test_kf_bpf_load(void);
+extern int test_kf_bpf_attach_detach(void);
+extern int test_kf_bpf_integration(void);
 extern int test_aa_clean_packet(void);
 extern int test_aa_bad_packet_scoring(void);
 extern int test_off_trusted_bypass(void);
@@ -58,6 +69,14 @@ extern int test_property_hkdf_deterministic(void);
 extern int test_property_session_state_machine(void);
 extern int test_property_identity_key_exchange(void);
 
+/* Group chat */
+extern int test_group_create_wrapper(void);
+extern int test_group_members_wrapper(void);
+extern int test_group_messages_wrapper(void);
+extern int test_group_list_wrapper(void);
+extern int test_group_capacity_wrapper(void);
+extern int test_group_msg_rollover_wrapper(void);
+
 /* Benchmarks */
 extern int test_bench_handshake_latency(void);
 extern int test_bench_chat_throughput(void);
@@ -88,6 +107,10 @@ static test_entry_t all_tests[] = {
     {"test_kf_blocklist",              test_kf_blocklist},
     {"test_kf_size",                   test_kf_size},
     {"test_kf_port",                   test_kf_port},
+    {"test_kf_bpf_map",                test_kf_bpf_map},
+    {"test_kf_bpf_load",               test_kf_bpf_load},
+    {"test_kf_bpf_attach_detach",      test_kf_bpf_attach_detach},
+    {"test_kf_bpf_integration",        test_kf_bpf_integration},
     {"test_aa_clean_packet",           test_aa_clean_packet},
     {"test_aa_bad_packet_scoring",     test_aa_bad_packet_scoring},
     {"test_off_trusted_bypass",        test_off_trusted_bypass},
@@ -130,6 +153,14 @@ static test_entry_t all_tests[] = {
     {"test_property_session_state_machine",    test_property_session_state_machine},
     {"test_property_identity_key_exchange",    test_property_identity_key_exchange},
 
+    /* Group */
+    {"test_group_create",              test_group_create_wrapper},
+    {"test_group_members",             test_group_members_wrapper},
+    {"test_group_messages",            test_group_messages_wrapper},
+    {"test_group_list",                test_group_list_wrapper},
+    {"test_group_capacity",            test_group_capacity_wrapper},
+    {"test_group_msg_rollover",        test_group_msg_rollover_wrapper},
+
     /* Benchmarks */
     {"test_bench_handshake_latency",    test_bench_handshake_latency},
     {"test_bench_chat_throughput",      test_bench_chat_throughput},
@@ -143,17 +174,29 @@ static const int num_tests = sizeof(all_tests) / sizeof(all_tests[0]);
 
 static int run_test(test_entry_t* t)
 {
-    int ret = t->fn();
-    printf("[%s] %s\n", ret == 0 ? "PASS" : "FAIL", t->name);
-    return ret;
+    return t->fn();
+}
+
+static void print_verdict(const char* name, int ret)
+{
+    const char* verdict = "FAIL";
+    if (ret == 0)         verdict = "PASS";
+    else if (ret == TEST_SKIP) verdict = "SKIP";
+    printf("[%s] %s\n", verdict, name);
 }
 
 static int run_all_tests(void)
 {
-    int failed = 0;
-    for (int i = 0; i < num_tests; i++)
-        failed += (run_test(&all_tests[i]) != 0);
-    printf("\n%d/%d tests passed\n", num_tests - failed, num_tests);
+    int passed = 0, skipped = 0, failed = 0;
+    for (int i = 0; i < num_tests; i++) {
+        int ret = run_test(&all_tests[i]);
+        print_verdict(all_tests[i].name, ret);
+        if (ret == 0)            passed++;
+        else if (ret == TEST_SKIP) skipped++;
+        else                     failed++;
+    }
+    printf("\n%d/%d tests passed (%d skipped, %d failed)\n",
+           passed, num_tests, skipped, failed);
     return failed;
 }
 
@@ -166,21 +209,27 @@ int main(int argc, char** argv)
         return 0;
     }
     if (argc > 1) {
-        int failed = 0;
-        int found  = 0;
+        int failed = 0, skipped = 0, passed = 0;
         for (int a = 1; a < argc; a++) {
+            int found = 0;
             for (int i = 0; i < num_tests; i++) {
                 if (strcmp(all_tests[i].name, argv[a]) == 0) {
+                    int ret = run_test(&all_tests[i]);
+                    print_verdict(all_tests[i].name, ret);
+                    if (ret == 0)            passed++;
+                    else if (ret == TEST_SKIP) skipped++;
+                    else                     failed++;
                     found = 1;
-                    failed += (run_test(&all_tests[i]) != 0);
                     break;
                 }
             }
             if (!found) {
                 printf("[SKIP] %s (not found)\n", argv[a]);
-                found = 0;
+                skipped++;
             }
         }
+        printf("\n%d/%d tests passed (%d skipped, %d failed)\n",
+               passed, passed + skipped + failed, skipped, failed);
         return failed;
     }
     return run_all_tests();

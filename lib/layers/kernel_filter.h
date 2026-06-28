@@ -28,3 +28,10 @@ int kernel_filter_whitelist_add(const uint8_t* addr);
 int kernel_filter_blocklist_add(const uint8_t* addr);
 void kernel_filter_set_bound_port(uint16_t port);
 int kernel_filter_check(packet_view_t* p);
+
+/* eBPF/XDP integration — attach BPF program to interface */
+int kernel_filter_bpf_attach_iface(const char* ifname);
+int kernel_filter_bpf_detach_iface(void);
+int kernel_filter_bpf_sync_state(void);
+int kernel_filter_bpf_loaded(void);
+void kernel_filter_bpf_cleanup(void);
