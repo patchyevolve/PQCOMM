@@ -76,12 +76,13 @@ static int derive_rekey_keys(session_t* sess, const uint8_t* shared_secret, uint
                             session_key, 32, channel_keys) != 0)
         return -1;
 
+    session_lock_keys(sess);
     crypto_secure_wipe(&sess->keys, sizeof(sess->keys));
-
     memcpy(sess->keys.session_key, session_key, 32);
     for (int i = 0; i < 5; i++)
         memcpy(sess->keys.channel_keys[i], channel_keys[i], 32);
     sess->keys.key_epoch = epoch;
+    session_unlock_keys(sess);
 
     crypto_secure_wipe(session_key, sizeof(session_key));
     crypto_secure_wipe(channel_keys, sizeof(channel_keys));

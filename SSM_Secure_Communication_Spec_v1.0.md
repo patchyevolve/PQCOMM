@@ -221,7 +221,7 @@ LOCKED      → CLOSED
 These are the internal session states used during the PQ handshake (mapped to system-level `HANDSHAKE` / `VERIFY`):
 
 ```
-IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT → IDENTITY_PROOF_SENT → LOCKED
+IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT → IDENTITY_PROOF_SENT → VERIFY → LOCKED
 ```
 
 ---
@@ -268,7 +268,7 @@ As implemented in `pipeline/pipeline_inbound.c` (Phase 5):
 6. `resilience_check` — FEC RX tracking, parity storage, packet recovery (runs before decrypt so FEC operates on ciphertext)
 7. `session_enc_check` — decrypts ChaCha20-Poly1305, verifies tag, channel key AAD binding
 8. `seq_check` — replay window (runs after decrypt so recovered packets get proper seq)
-10. `rx_demux_push` — routes to channel queue (CONTROL → control, CHAT → chat, ROUTE → route, etc.)
+9. `rx_demux_push` — routes to channel queue (CONTROL → control, CHAT → chat, ROUTE → route, etc.)
 
 ### Outbound Order
 

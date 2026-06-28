@@ -111,6 +111,7 @@ typedef struct {
     handshake_role_t role;
     handshake_crypto_t hs;
     session_keys_t keys;
+    volatile long keys_guard;  /* spinlock for rekey vs crypto worker */
     resilience_t resilience;
     uint8_t handshake_complete;
     packet_buf_t* fec_recovered;
@@ -159,3 +160,14 @@ session_t* session_find_by_id(uint64_t session_id);
 session_t* session_find_by_addr(void* addr, int addr_len);
 int session_register(session_t* sess, void* addr, int addr_len, session_dir_t dir);
 int session_register_path(session_t* sess, uint32_t path_idx, void* addr, int addr_len);
+
+/* keys_guard spinlock: protects keys during rekey vs crypto worker access */
+static inline void session_lock_keys(session_t* s) {
+    if (!s) return;
+    while (__sync_lock_test_and_set(&s->keys_guard, 1))
+        __sync_synchronize();
+}
+static inline void session_unlock_keys(session_t* s) {
+    if (!s) return;
+    __sync_lock_release(&s->keys_guard);
+}

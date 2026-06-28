@@ -90,7 +90,7 @@ Every time before committing:
 | RULE-10 | No mutex in audio path | ✅ Audio uses lock-free ring buffers |
 | RULE-11 | Packet parsed only once | ✅ Single `packet_parse` call per pipeline walk |
 | RULE-12 | Session must be exclusive | ✅ Single session per socket pair |
-| RULE-13 | Kernel filter must be first | ✅ Kernel filter runs 4th (after static, offensive, anti-analysis), before session gate |
+| RULE-13 | Kernel filter before session gate (not necessarily first in stack) | ✅ Kernel filter runs 4th (after static, offensive, anti-analysis), before session gate |
 | RULE-14 | Keys never leave secure store | ✅ Stack-only, no export |
 | RULE-15 | Resilience must not change session_id | ✅ FEC/multipath/port-hop preserve session_id |
 | RULE-16 | Replay window always active | ✅ `seq_check.c` bitmap |
@@ -205,7 +205,7 @@ cmake --build build_mingw
 
 ```
 IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT
-    → IDENTITY_PROOF_SENT → LOCKED
+    → IDENTITY_PROOF_SENT → VERIFY → LOCKED
 ```
 
 ## Channels

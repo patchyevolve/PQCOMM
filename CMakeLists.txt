@@ -36,7 +36,6 @@ set(LIB_SRC
     lib/core/scheduler.c
     lib/core/resilience_ctx.c
     lib/core/rx_worker.c
-    lib/core/io_poll_win.c
     lib/layers/packet_parse.c
     lib/layers/offensive.c
     lib/layers/anti_analysis.c
@@ -74,6 +73,7 @@ if (WIN32)
         lib/core/udp_win.c
         lib/core/io_wait_win.c
         lib/core/io_poll_win.c
+        lib/layers/kernel_filter_bpf.c
     )
 else()
     list(APPEND LIB_SRC

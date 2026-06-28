@@ -98,6 +98,7 @@ static int verify_state_transition(session_t* sess, uint8_t received_opcode)
 int handshake_init_initiator(session_t* sess, uint8_t kem_type)
 {
     if (!sess) return -1;
+    if (kem_type != KEM_TYPE_MLKEM_768) return -1;
     session_reset(sess);
     sess->role = ROLE_INITIATOR;
     sess->state = SESSION_HANDSHAKE_START;
@@ -121,6 +122,7 @@ int handshake_init_initiator(session_t* sess, uint8_t kem_type)
 int handshake_init_responder(session_t* sess, uint8_t kem_type)
 {
     if (!sess) return -1;
+    if (kem_type != KEM_TYPE_MLKEM_768) return -1;
     session_reset(sess);
     sess->role = ROLE_RESPONDER;
     sess->state = SESSION_HANDSHAKE_START;
@@ -140,6 +142,7 @@ packet_buf_t* handshake_build_hello(session_t* sess, uint32_t* seq_counter)
     if (!p) return NULL;
 
     uint8_t* d = p->data;
+    memset(d, 0, 24);
     uint32_t magic = 0xAABBCCDD;
     uint8_t version = 1, flags = 0, channel = CH_CONTROL;
     uint32_t seq = (*seq_counter)++;
@@ -165,11 +168,12 @@ int handshake_build_accept(session_t* sess, packet_buf_t* out, uint32_t* seq_cou
 {
     if (!sess || !out || !seq_counter) return -1;
 
-    uint64_t session_id;
+    uint64_t session_id = 0;
     kem_random_bytes((uint8_t*)&session_id, sizeof(session_id));
     sess->session_id = session_id;
 
     uint8_t* d = out->data;
+    memset(d, 0, 24);
     uint32_t payload_len = 1 + 8;
 
     memcpy(d + 0, (uint32_t[]){ 0xAABBCCDD }, sizeof(uint32_t));
@@ -213,6 +217,7 @@ int handshake_build_kem_init(session_t* sess, packet_buf_t* out,
     kem_cleanup(&kem_ctx);
 
     uint8_t* d = out->data;
+    memset(d, 0, 24);
     uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
@@ -268,6 +273,7 @@ int handshake_build_kem_response(session_t* sess, packet_buf_t* out,
 
     {
         uint8_t* d = out->data;
+        memset(d, 0, 24);
         uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
         uint64_t session_id = sess->session_id;
         uint8_t channel = CH_CONTROL;
@@ -307,6 +313,7 @@ int handshake_build_identity(session_t* sess, packet_buf_t* out,
     if (!sess || !out || !seq_counter) return -1;
 
     uint8_t* d = out->data;
+    memset(d, 0, 24);
     uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
@@ -360,6 +367,7 @@ int handshake_build_locked(session_t* sess, packet_buf_t* out,
     if (!sess || !out || !seq_counter) return -1;
 
     uint8_t* d = out->data;
+    memset(d, 0, 24);
     uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
@@ -423,6 +431,7 @@ int handshake_build_error(session_t* sess, packet_buf_t* out,
     if (!sess || !out || !seq_counter) return -1;
 
     uint8_t* d = out->data;
+    memset(d, 0, 24);
     uint32_t magic = 0xAABBCCDD, version = 1, flags = 0;
     uint64_t session_id = sess->session_id;
     uint8_t channel = CH_CONTROL;
@@ -593,18 +602,14 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet,
         return HS_NEED_MORE;
 
     case CTRL_PQ_KEM_INIT:
-        /* minimum size: opcode(1) + 768-bit pk(1184) */
-        if (view->length < 1 + 1184) return HS_ERROR;
-        memcpy(sess->hs.peer_public_key, view->payload + 1,
-               (sess->hs.kem_type == KEM_TYPE_MLKEM_768) ? 1184 : 1568);
+        if (view->length < 1 + KEM_MLKEM_768_PK_SIZE) return HS_ERROR;
+        memcpy(sess->hs.peer_public_key, view->payload + 1, KEM_MLKEM_768_PK_SIZE);
         return HS_NEED_MORE;
 
     case CTRL_PQ_KEM_RESPONSE:
-        if (view->length < 1 + 1088) return HS_ERROR;
-        if (kem_decapsulate(sess->hs.kem_secret_key,
-                            (sess->hs.kem_type == KEM_TYPE_MLKEM_768) ? 2400 : 3168,
-                            view->payload + 1,
-                            (sess->hs.kem_type == KEM_TYPE_MLKEM_768) ? 1088 : 1568,
+        if (view->length < 1 + KEM_MLKEM_768_CT_SIZE) return HS_ERROR;
+        if (kem_decapsulate(sess->hs.kem_secret_key, KEM_MLKEM_768_SK_SIZE,
+                            view->payload + 1, KEM_MLKEM_768_CT_SIZE,
                             sess->hs.kem_shared_secret, 32) != 0)
             return HS_ERROR;
         return HS_NEED_MORE;
@@ -660,8 +665,13 @@ int handshake_process_message(session_t* sess, packet_buf_t* packet,
         return HS_NEED_MORE;
 
     case CTRL_SESSION_LOCKED:
-        /* verify responder identity (AEAD-encrypted) */
-        if (view->length >= 93) {
+        /* must have full AEAD-encrypted identity proof */
+        if (view->length < 93) { /* opcode(1) + nonce(12) + cipher(64) + tag(16) */
+            sess->hs.last_error = HS_ERR_BAD_IDENTITY;
+            g_handshake_stats.failures_identity++;
+            return HS_ERROR;
+        }
+        {
             const mbedtls_md_info_t* md =
                 mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
             uint8_t proof_key[32], nonce[12], tag[16], plain[64];

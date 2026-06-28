@@ -39,7 +39,10 @@ static void* crypto_loop(void* arg)
         if (job->type == CRYPTO_JOB_DECRYPT || job->type == CRYPTO_JOB_FEC_DECRYPT) {
             packet_view_t view = { 0 };
             if (packet_parse(job->p, &view) == 0 && view.encrypted) {
-                if (session_enc_check(&view, job->sess) == 0) {
+                session_lock_keys(job->sess);
+                int ret = session_enc_check(&view, job->sess);
+                session_unlock_keys(job->sess);
+                if (ret == 0) {
                     ring_push(&g_result_ring, job->p);
                 } else {
                     pool_return(job->p);
@@ -50,7 +53,9 @@ static void* crypto_loop(void* arg)
         } else if (job->type == CRYPTO_JOB_ENCRYPT) {
             packet_view_t view = { 0 };
             if (packet_parse(job->p, &view) == 0) {
+                session_lock_keys(job->sess);
                 session_enc_apply(job->p, &view, job->sess);
+                session_unlock_keys(job->sess);
             }
             ring_push(&g_result_ring, job->p);
         }
