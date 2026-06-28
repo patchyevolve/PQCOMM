@@ -184,8 +184,6 @@ void tui_erase_line(void)
     tui_write("\033[2K\r");
 }
 
-
-
 #ifndef _WIN32
 static void tui_sigwinch_handler(int sig)
 {
@@ -246,6 +244,9 @@ void tui_init(tui_t* t)
     t->input_active = 1;
     t->peer_scroll = 0;
     t->peer_selected = 0;
+    t->space = 0;
+    t->user_tab = 0;
+    t->adv_tab = 0;
 }
 
 void tui_term_init(tui_t* t)
@@ -274,26 +275,44 @@ void tui_render(tui_t* t)
     char buf[65536];
     int pos = 0;
     int max = (int)sizeof(buf);
+
     pos += tui_panel_topbar(t, buf + pos, max - pos);
+
     switch (t->screen) {
         case SCREEN_LOGIN:
             pos += tui_panel_login(t, buf + pos, max - pos);
             break;
+
         case SCREEN_PEER_LIST:
+            pos += tui_panel_user_tabs(t, buf + pos, max - pos);
             pos += tui_panel_peer_list(t, buf + pos, max - pos);
             break;
+
         case SCREEN_CHAT:
             pos += tui_panel_chat(t, buf + pos, max - pos);
             break;
+
         case SCREEN_GROUP:
+            pos += tui_panel_user_tabs(t, buf + pos, max - pos);
             pos += tui_panel_room_sidebar(t, buf + pos, max - pos);
             pos += tui_panel_group_chat(t, buf + pos, max - pos);
             pos += tui_panel_member_sidebar(t, buf + pos, max - pos);
             break;
+
+        case SCREEN_SETTINGS:
+            pos += tui_panel_settings(t, buf + pos, max - pos);
+            break;
+
+        case SCREEN_ADVANCED:
+            pos += tui_panel_adv_tabs(t, buf + pos, max - pos);
+            pos += tui_panel_advanced(t, buf + pos, max - pos);
+            break;
     }
+
     pos += tui_panel_request_popup(t, buf + pos, max - pos);
     pos += tui_panel_call_popup(t, buf + pos, max - pos);
     pos += tui_panel_statusbar(t, buf + pos, max - pos);
+
     if (pos > 0) tui_write(buf);
     if (pos > max) tui_write("[render truncated]");
     t->dirty = 0;
@@ -333,4 +352,17 @@ void tui_add_log(tui_t* t, const char* msg)
 {
     if (t->log_line < 32)
         snprintf(t->log[t->log_line++], 256, "%s", msg);
+}
+
+void tui_event_journal_add(tui_t* t, const char* category, const char* msg)
+{
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char ts[16];
+    if (tm_info) strftime(ts, sizeof(ts), "%H:%M:%S", tm_info);
+    else snprintf(ts, sizeof(ts), "--:--:--");
+
+    char entry[256];
+    snprintf(entry, sizeof(entry), "[%s] [%s] %s", ts, category, msg);
+    tui_add_log(t, entry);
 }

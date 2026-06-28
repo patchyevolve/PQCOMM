@@ -3,7 +3,10 @@
 #include "transport_api.h"
 #include "identity.h"
 
-typedef enum { SCREEN_LOGIN, SCREEN_PEER_LIST, SCREEN_CHAT, SCREEN_GROUP } screen_t;
+typedef enum {
+    SCREEN_LOGIN, SCREEN_PEER_LIST, SCREEN_CHAT, SCREEN_GROUP,
+    SCREEN_SETTINGS, SCREEN_ADVANCED
+} screen_t;
 
 typedef enum { GROUP_FOCUS_ROOMS = 0, GROUP_FOCUS_CHAT = 1, GROUP_FOCUS_MEMBERS = 2 } group_focus_t;
 
@@ -22,6 +25,19 @@ typedef struct {
 #define TUI_MAX_PEERS 32
 
 typedef enum {
+    USER_TAB_PEERS, USER_TAB_CHATS, USER_TAB_GROUPS,
+    USER_TAB_CALLS, USER_TAB_FILES, USER_TAB_SETTINGS,
+    USER_TAB_COUNT
+} user_tab_t;
+
+typedef enum {
+    ADV_TAB_OVERVIEW, ADV_TAB_SECURITY, ADV_TAB_PIPELINE,
+    ADV_TAB_WATCHERS, ADV_TAB_NETWORK, ADV_TAB_CRYPTO,
+    ADV_TAB_EVENTS, ADV_TAB_CONTROLS,
+    ADV_TAB_COUNT
+} adv_tab_t;
+
+typedef enum {
     TUI_ACTION_NONE = 0,
     TUI_ACTION_QUIT,
     TUI_ACTION_LOGIN_SUBMIT,
@@ -35,6 +51,8 @@ typedef enum {
     TUI_ACTION_VIDEO_TOGGLE,
     TUI_ACTION_FILE_SEND,
     TUI_ACTION_GO_BACK,
+    TUI_ACTION_OPEN_SETTINGS,
+    TUI_ACTION_OPEN_ADVANCED,
 } tui_action_t;
 
 typedef struct {
@@ -44,6 +62,12 @@ typedef struct {
 
     screen_t screen;
     int running;
+    int space; /* 0=user, 1=advanced */
+    int user_tab;
+    int adv_tab;
+    int adv_paused;
+    int adv_selected_row;
+    char adv_filter[64];
 
     /* identity */
     char username[32];
@@ -119,6 +143,13 @@ typedef struct {
     char log[32][256];
     int audio_active;
     int video_active;
+
+    /* settings */
+    int settings_selection;
+    int settings_confirm;
+
+    /* cached snapshots for advanced space */
+    conn_info_t adv_cached_conn;
 } tui_t;
 
 void tui_init(tui_t* t);
@@ -132,3 +163,4 @@ void tui_update_info(tui_t* t, conn_info_t* info);
 void tui_suspend(tui_t* t);
 void tui_add_log(tui_t* t, const char* msg);
 void tui_shutdown(tui_t* t);
+void tui_event_journal_add(tui_t* t, const char* category, const char* msg);

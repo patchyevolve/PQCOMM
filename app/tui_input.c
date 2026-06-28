@@ -23,6 +23,11 @@ static int g_win_console_mode_initialized = 0;
 #define TUI_KEY_VID_CALL_ACCEPT  -32
 #define TUI_KEY_VID_CALL_DECLINE -33
 #define TUI_KEY_PEER_BASE     10
+#define TUI_KEY_SETTINGS_OPEN  -40
+#define TUI_KEY_ADV_OPEN       -41
+#define TUI_KEY_ADV_RETURN     -42
+#define TUI_KEY_ADV_REFRESH    -43
+#define TUI_KEY_ADV_PAUSE      -44
 
 void tui_input_init(void)
 {
@@ -172,6 +177,7 @@ static int handle_peer_list_input(tui_t* t, int c, int* selected_peer)
         t->input_buf[0] = '\0'; t->input_len = 0; t->input_pos = 0; t->dirty = 1;
         return 0;
     }
+    if (c == 19) return TUI_KEY_SETTINGS_OPEN; /* Ctrl+S */
     if (c == '\n' || c == -3) {
         if (t->peer_selected >= 0 && t->peer_selected < t->peer_count) { *selected_peer = t->peer_selected; return 1; }
         return 0;
@@ -217,6 +223,7 @@ static int handle_chat_input(tui_t* t, int c)
     if (c == 1) return TUI_KEY_AUDIO_TOGGLE;
     if (c == 22) return TUI_KEY_VIDEO_TOGGLE;
     if (c == 6) return TUI_KEY_FILE_SEND;
+    if (c == 19) return TUI_KEY_SETTINGS_OPEN;
     if (c == '\n' || c == '\r') {
         if (t->input_len > 0) { int len = t->input_len; t->input_buf[len] = '\0'; t->input_len = 0; t->input_pos = 0; t->dirty = 1; return len; }
         return 0;
@@ -261,6 +268,97 @@ static int handle_group_input(tui_t* t, int c)
     return 0;
 }
 
+static int handle_settings_input(tui_t* t, int c)
+{
+    int nsettings = 6;
+    if (c == 'q' || c == 'Q') { t->running = 0; return 0; }
+    if (c == 27 || c == -4) {
+        t->screen = SCREEN_PEER_LIST; t->dirty = 1; return 0;
+    }
+    if (c == 'j' || c == -2) {
+        if (t->settings_selection < nsettings - 1) { t->settings_selection++; t->dirty = 1; }
+        return 0;
+    }
+    if (c == 'k' || c == -1) {
+        if (t->settings_selection > 0) { t->settings_selection--; t->dirty = 1; }
+        return 0;
+    }
+    if (c == '\n' || c == -3) {
+        if (t->settings_selection == 4) {
+            /* Open Advanced Space */
+            t->screen = SCREEN_ADVANCED;
+            t->adv_tab = 0;
+            t->adv_paused = 0;
+            t->space = 1;
+            t->dirty = 1;
+            return 0;
+        }
+        if (t->settings_selection == 5) {
+            t->running = 0;
+            return 0;
+        }
+        t->dirty = 1;
+        return 0;
+    }
+    if (c == 4) return TUI_KEY_ADV_OPEN; /* Ctrl+D */
+    return 0;
+}
+
+static int handle_advanced_input(tui_t* t, int c)
+{
+    if (c == 27 || c == -4) {
+        t->screen = SCREEN_SETTINGS;
+        t->space = 0;
+        t->dirty = 1;
+        return 0;
+    }
+    if (c == 'q' || c == 'Q') { t->running = 0; return 0; }
+    if (c == 'p' || c == 'P') { t->adv_paused = !t->adv_paused; t->dirty = 1; return 0; }
+    if (c == 'r' || c == 'R') { t->dirty = 1; return 0; }
+    if (c == -3 || c == '\n') { t->dirty = 1; return 0; } /* Enter drill */
+
+    /* F2 return to user space */
+    if (c == -12) { /* F2 -> \033OQ or \033[12~ */
+        t->screen = SCREEN_PEER_LIST;
+        t->space = 0;
+        t->dirty = 1;
+        return 0;
+    }
+
+    /* Tab / Shift+Tab navigation */
+    if (c == '\t') {
+        t->adv_tab = (t->adv_tab + 1) % ADV_TAB_COUNT;
+        t->dirty = 1;
+        return 0;
+    }
+
+    /* [ / ] for tab nav */
+    if (c == '[') {
+        t->adv_tab = (t->adv_tab - 1 + ADV_TAB_COUNT) % ADV_TAB_COUNT;
+        t->dirty = 1;
+        return 0;
+    }
+    if (c == ']') {
+        t->adv_tab = (t->adv_tab + 1) % ADV_TAB_COUNT;
+        t->dirty = 1;
+        return 0;
+    }
+
+    /* up/down for controls tab row selection */
+    if (c == 'j' || c == 'k' || c == -1 || c == -2) {
+        int max_row = 6;
+        if (c == 'j' || c == -2) {
+            if (t->adv_selected_row < max_row - 1) t->adv_selected_row++;
+        } else {
+            if (t->adv_selected_row > 0) t->adv_selected_row--;
+        }
+        t->dirty = 1;
+        return 0;
+    }
+
+    return 0;
+}
+
 #ifdef _WIN32
 static int read_win32_console_input(tui_t* t)
 {
@@ -285,9 +383,13 @@ static int read_win32_console_input(tui_t* t)
                     case VK_ESCAPE: key = 27; break;
                     case VK_BACK:  key = 127; break;
                     case VK_TAB:   key = '\t'; break;
-#ifdef VK_OEM_PLUS
-                    case VK_OEM_PLUS: key = '+'; break;
-#endif
+                    case VK_F2:    key = -12; break;
+                    case VK_F5:    key = -15; break;
+                    case VK_F6:    key = -16; break;
+                    case VK_F7:    key = -17; break;
+                    case VK_F8:    key = -18; break;
+                    case VK_F9:    key = -19; break;
+                    case VK_F10:   key = -20; break;
                     default: key = 0; break;
                 }
             }
@@ -334,19 +436,104 @@ int tui_input_poll(tui_t* t, int timeout_ms)
     char c;
     if (read(STDIN_FILENO, &c, 1) != 1) return 0;
     int key = (unsigned char)c;
+
+    /* Handle F-keys and other multi-byte sequences */
     if (key == 27) {
         struct pollfd peek; peek.fd = STDIN_FILENO; peek.events = POLLIN;
         if (poll(&peek, 1, 0) > 0) {
-            int is_mouse = 0, mouse_btn = 0, mouse_x = 0, mouse_y = 0;
-            int esc = read_escape_seq(&is_mouse, &mouse_btn, &mouse_x, &mouse_y);
-            if (is_mouse) {
-                int is_release = (mouse_btn & 32) ? 1 : 0, btn = mouse_btn & ~32;
-                int is_scroll = (btn >= 64 && btn <= 65), scroll_dir = (btn == 64) ? -1 : (btn == 65) ? 1 : 0;
-                t->mouse_last_x = mouse_x; t->mouse_last_y = mouse_y;
-                t->mouse_btn = is_release ? 0 : (btn <= 2 ? btn : 0);
-                t->mouse_scroll = scroll_dir; t->mouse_event = 1; t->dirty = 1;
-                key = is_scroll ? -200 + scroll_dir : (!is_release && btn <= 2 ? -100 + btn : 0);
-            } else if (esc) { key = esc; }
+            char seq[8];
+            int slen = 0;
+            if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                slen++;
+                if (seq[0] == '[') {
+                    if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                        slen++;
+                        /* F1-F4: O P Q R */
+                        /* F5: [15~, F6: [17~, F7: [18~, F8: [19~, F9: [20~, F10: [21~ */
+                        /* F2: OQ or [12~ */
+                        if (seq[1] >= 'A' && seq[1] <= 'D') {
+                            switch (seq[1]) {
+                                case 'A': key = -1; break;
+                                case 'B': key = -2; break;
+                                case 'C': key = -3; break;
+                                case 'D': key = -4; break;
+                                default: key = 0;
+                            }
+                        } else if (seq[1] == 'O') {
+                            if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                                slen++;
+                                if (seq[2] == 'Q') key = -12; /* F2 */
+                                else if (seq[2] == 'R') key = -13; /* F3 */
+                                else if (seq[2] == 'S') key = -14; /* F4 */
+                            }
+                        } else if (seq[1] == '1') {
+                            if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                                slen++;
+                                if (seq[2] == '5' || seq[2] == '7' || seq[2] == '8' || seq[2] == '9' || seq[2] == '0') {
+                                    if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                                        slen++;
+                                        if (seq[3] == '~') {
+                                            switch (seq[2]) {
+                                                case '5': key = -15; break; /* F5 */
+                                                case '7': key = -16; break; /* F6 */
+                                                case '8': key = -17; break; /* F7 */
+                                                case '9': key = -18; break; /* F8 */
+                                                case '0': key = -19; break; /* F9 */
+                                            }
+                                        }
+                                    }
+                                } else if (seq[2] == '2') {
+                                    if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                                        slen++;
+                                        if (seq[3] == '~') key = -12; /* F2 via [12~ */
+                                    }
+                                }
+                            }
+                        } else if (seq[1] == '2') {
+                            if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                                slen++;
+                                if (seq[2] == '1' || seq[2] == '3' || seq[2] == '4') {
+                                    if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                                        slen++;
+                                        if (seq[3] == '~') {
+                                            switch (seq[2]) {
+                                                case '1': key = -19; break; /* F9 via [21~ */
+                                                case '3': key = -20; break; /* F10 */
+                                                case '4': key = -21; break; /* F11 */
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (seq[1] == '<') {
+                            /* mouse SGR — read rest via read_mouse_sgr */
+                            int mbtn, mmx, mmy;
+                            if (read_mouse_sgr(&mbtn, &mmx, &mmy)) {
+                                int is_release = (mbtn & 32) ? 1 : 0;
+                                int btn = mbtn & ~32;
+                                int is_scroll = (btn >= 64 && btn <= 65);
+                                int scroll_dir = (btn == 64) ? -1 : (btn == 65) ? 1 : 0;
+                                t->mouse_last_x = mmx; t->mouse_last_y = mmy;
+                                t->mouse_btn = is_release ? 0 : (btn <= 2 ? btn : 0);
+                                t->mouse_scroll = scroll_dir; t->mouse_event = 1; t->dirty = 1;
+                                key = is_scroll ? -200 + scroll_dir : (!is_release && btn <= 2 ? -100 + btn : 0);
+                            }
+                        }
+                    }
+                } else if (seq[0] == 'O') {
+                    /* SS3 prefix for F1-F4 on some terminals */
+                    if (read(STDIN_FILENO, &seq[slen], 1) == 1) {
+                        slen++;
+                        switch (seq[1]) {
+                            case 'P': key = -11; break; /* F1 */
+                            case 'Q': key = -12; break; /* F2 */
+                            case 'R': key = -13; break; /* F3 */
+                            case 'S': key = -14; break; /* F4 */
+                            default: key = 0;
+                        }
+                    }
+                }
+            }
         }
     }
 #endif
@@ -363,6 +550,8 @@ int tui_input_poll(tui_t* t, int timeout_ms)
         case SCREEN_PEER_LIST: { int sel = -1; int r = handle_peer_list_input(t, key, &sel); if (r > 0 && sel >= 0) return sel + TUI_KEY_PEER_BASE; return 0; }
         case SCREEN_CHAT:      return handle_chat_input(t, key);
         case SCREEN_GROUP:     return handle_group_input(t, key);
+        case SCREEN_SETTINGS:  return handle_settings_input(t, key);
+        case SCREEN_ADVANCED:  return handle_advanced_input(t, key);
         default: return 0;
     }
 }
