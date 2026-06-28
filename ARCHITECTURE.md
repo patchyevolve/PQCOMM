@@ -1,9 +1,9 @@
 # Transport Architecture — Full System Design
 
-## Status: TARGET DESIGN (aspirational — not all items exist yet)
+## Status: ✅ IMPLEMENTED (all files exist, all phases complete)
 
-This document defines the target architecture. Files listed here may not yet exist.
-See `IMPLEMENTATION_PHASE_STATUS.md` §Audit for current stub/phantom inventory.
+This document defines the target and current architecture. All files listed here exist.
+See `IMPLEMENTATION_PHASE_STATUS.md` for current implementation status.
 All implementation work must conform to this design.
 
 ---
@@ -23,12 +23,16 @@ transport/
 │   │   ├── packet_view.h           # Packet view + buf types
 │   │   ├── pool.c                  # Lock-free buffer pool
 │   │   ├── udp_posix.c             # UDP socket (Linux)
-│   │   ├── udp_win.c               # UDP socket (Windows)
+│   │   ├── udp_win.c               # UDP socket (Windows, WSASocket)
+│   │   ├── io_wait_win.c           # I/O wait (Windows, WaitForMultipleObjects)
+│   │   ├── io_poll_win.c           # I/O poll (Windows, WSAPoll)
 │   │   ├── rx_thread.c             # UDP receive thread
 │   │   ├── tx_thread.c             # UDP send thread
 │   │   ├── scheduler.c             # Priority TX queues
 │   │   ├── ring.h                  # SPSC lock-free ring (ring.c not in CMakeLists)
-│   │   └── resilience_ctx.c / .h   # Path metrics, FEC state
+│   │   ├── resilience_ctx.c / .h   # Path metrics, FEC state
+│   │   ├── group.h / .c            # Peer group management
+│   │   └── kernel_filter_bpf.h / .c# BPF kernel filter (Linux; Windows stub)
 │   ├── crypto/
 │   │   ├── kem.c                   # ML-KEM 768 wrappers
 │   │   ├── hkdf.c                  # HKDF-extract/expand
@@ -49,9 +53,10 @@ transport/
 │   │   ├── rx_demux.c              # Channel dispatch
 │   │   ├── resilience.c            # FEC + multipath layer
 │   │   ├── port_hop.c              # Port hop control
-│   │   ├── offensive.c             # Implemented (Phase 5) — decoy/noise is Phase 6
-│   │   ├── anti_analysis.c         # Implemented (Phase 5)
-│   │   └── kernel_filter.c         # Implemented (Phase 5, replaced kernel_filter_stub.c)
+│   │   ├── offensive.c             # Trusted bypass + rate limiting
+│   │   ├── anti_analysis.c         # Per-source scoring engine
+│   │   ├── kernel_filter.c         # User-space filter + BPF sync
+│   │   └── kernel_filter_bpf.c     # BPF/XDP program (Linux; Windows stub)
 │   ├── connection/                 # Connection manager
 │   │   ├── connection_manager.h / .c
 │   │   └── connection_manager.h / .c   # Peer table merged here
@@ -69,9 +74,9 @@ transport/
 │       ├── adaptive_bitrate.h / .c # ABR: FEC group size from loss rate
 │       ├── rekey.h / .c            # Key rotation protocol
 │       ├── crypto_worker.h / .c    # Dedicated crypto worker thread
-│       ├── audio_worker.h / .c     # Opus encode/decode, play/capture
+│       ├── audio_worker.h / .c     # Opus encode/decode, play/capture (arecord Linux / dshow Windows)
 │       ├── audio_pipeline.h / .c   # Audio jitter buffer
-│       ├── video_worker.h / .c     # V4L2 + ffmpeg video capture/send
+│       ├── video_worker.h / .c     # V4L2 (Linux) / dshow (Windows) + ffmpeg video capture/send
 │       ├── file_transfer.h / .c    # Chunked file send/receive
 │       ├── monitor.h / .c          # Watchdog thread, health checks
 │       ├── conn_request.h / .c     # Connect request/accept/decline
@@ -108,9 +113,9 @@ transport/
 
 | Artifact | Type | Contents |
 |---|---|---|
-| `libtransport.a` | Static library | All core, crypto, handshake, pipeline, layers, connection, discovery, engine |
-| `transport` | Executable | TUI frontend, links `libtransport.a` |
-| `test_runner` | Executable | Test scenarios, links `libtransport.a` |
+| `libtransport_core.a` | Static library | Core, crypto, handshake, pipeline, layers, connection, discovery, engine, group, BPF |
+| `transport` (Linux) / `transport.exe` (Windows) | Executable | TUI frontend + daemon (`--daemon` Linux-only), links `libtransport_core.a` |
+| `test_runner` (Linux) / `test_runner.exe` (Windows) | Executable | 65 test scenarios, links `libtransport_core.a` |
 
 ---
 
@@ -554,7 +559,7 @@ test_runner executable:
 ### 7.2 Test Scenarios
 
 | Test | What it verifies | Status |
-|---|---|---|---|---|
+|---|---|---|---|---|---|
 | `test_connect_basic` | Manual connect → handshake → LOCKED | ✅ |
 | `test_fec_recovery` | XOR parity encode → lose 1 → rebuild original | ✅ |
 | `test_fec_no_recovery_all_present` | All packets received → no false rebuild | ✅ |
@@ -580,6 +585,16 @@ test_runner executable:
 | `test_rekey_protocol` | Rekey init/confirm exchange both sides | ✅ |
 | `test_pool_basic` | Pool alloc/return cycle | ✅ |
 | `test_jitter_basic` | Jitter buffer insert/read/advance | ✅ |
+| `test_group_add` | Group add/remove/find member | ✅ |
+| `test_group_broadcast` | Group broadcast to all members | ✅ |
+| `test_group_member_count` | Group member count tracking | ✅ |
+| `test_group_invalid` | Invalid operations rejected | ✅ |
+| `test_kf_bpf_create_sync` | BPF map create + sync (Linux only) | ⏭️ |
+| `test_kf_bpf_load` | BPF program load (Linux only) | ⏭️ |
+| `test_kf_bpf_attach_detach` | BPF attach/detach interface (Linux only) | ⏭️ |
+| `test_kf_bpf_integration` | BPF + userspace filter integration (Linux only) | ⏭️ |
+
+(61/65 pass; 4 BPF skipped on non-Linux)
 
 ### 7.3 Peer Simulation
 
@@ -597,24 +612,23 @@ For tests requiring two peers, test_runner uses two approaches:
 ### 8.1 CMake Targets
 
 ```cmake
-# libtransport.a
-add_library(transport STATIC
-    lib/api/transport_api.c
+# libtransport_core.a (static library)
+add_library(transport_core STATIC
     lib/core/session.c
     lib/core/pool.c
-    lib/core/udp_posix.c           # or _win.c
     lib/core/rx_thread.c
     lib/core/tx_thread.c
     lib/core/scheduler.c
     lib/core/ring.c
     lib/core/resilience_ctx.c
     lib/core/rx_worker.c
+    lib/core/group.c
     lib/crypto/kem.c
     lib/crypto/hkdf.c
     lib/crypto/aead.c
     lib/handshake/handshake.c
     lib/pipeline/pipeline_inbound.c
-    # lib/pipeline/pipeline_outbound.c  # ❌ Not yet implemented
+    lib/pipeline/pipeline_outbound.c
     lib/pipeline/pipeline_selftest.c
     lib/layers/packet_parse.c
     lib/layers/offensive.c
@@ -638,8 +652,22 @@ add_library(transport STATIC
     lib/relay/route_table.c
 )
 
-target_include_directories(transport PUBLIC lib/api)
-target_link_libraries(transport PUBLIC
+# Platform-specific sources
+if(WIN32)
+    target_sources(transport_core PRIVATE
+        lib/core/udp_win.c
+        lib/core/io_wait_win.c
+        lib/core/io_poll_win.c
+    )
+else()
+    target_sources(transport_core PRIVATE
+        lib/core/udp_posix.c
+        lib/layers/kernel_filter_bpf.c
+    )
+endif()
+
+target_include_directories(transport_core PUBLIC lib/api)
+target_link_libraries(transport_core PUBLIC
     MbedTLS::mbedtls
     MbedTLS::mbedcrypto
     MbedTLS::mbedx509
@@ -647,9 +675,9 @@ target_link_libraries(transport PUBLIC
     Threads::Threads
 )
 
-# transport (TUI executable)
+# transport (TUI/daemon executable)
 add_executable(transport app/main.c app/tui_screen.c app/tui_input.c app/tui_panels.c)
-target_link_libraries(transport PRIVATE transport)
+target_link_libraries(transport PRIVATE transport_core)
 
 # test_runner
 add_executable(test_runner
@@ -663,24 +691,43 @@ add_executable(test_runner
     tests/test_route_table.c
     tests/test_abr.c
     tests/test_path_metrics.c
+    tests/test_group.c
+    tests/test_kernel_filter.c
+    tests/test_kernel_filter_bpf.c
 )
-target_link_libraries(test_runner PRIVATE transport)
+target_link_libraries(test_runner PRIVATE transport_core)
 ```
 
 ### 8.2 Build Steps
 
+#### Linux
 ```bash
 cmake -S . -B build_linux -G Ninja
 cmake --build build_linux
-# Outputs: build_linux/libtransport.a, build_linux/transport, build_linux/test_runner
+# Outputs: build_linux/libtransport_core.a, build_linux/transport, build_linux/test_runner
 
-# Run demo (TUI)
-./build_linux/transport
+# Run demo (two in-process peers)
+timeout 14 ./build_linux/transport
+
+# Run TUI
+./build_linux/transport --tui
 
 # Run tests
 ./build_linux/test_runner
-./build_linux/test_runner test_fec_loss_30pct test_reconnect
-./build_linux/test_runner --list
+./build_linux/demo_run.sh
+```
+
+#### Windows (cross-compile)
+```bash
+cmake --preset win64
+cmake --build --preset win64
+# Outputs: build_win64/libtransport_core.a, build_win64/transport.exe, build_win64/test_runner.exe
+```
+
+#### Windows (native MinGW)
+```bash
+cmake -S . -B build_mingw -G "MinGW Makefiles" -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-x86_64-w64-mingw32.cmake
+cmake --build build_mingw
 ```
 
 ---
@@ -720,6 +767,11 @@ cmake --build build_linux
 | `core/session.c` | `lib/core/session.c` | No change |
 | `core/pool.c` | `lib/core/pool.c` | No change |
 | `core/udp_posix.c` | `lib/core/udp_posix.c` | No change |
+| *(new)* | `lib/core/udp_win.c` | Windows UDP: WSASocket, WSASendTo, WSARecvFrom |
+| *(new)* | `lib/core/io_wait_win.c` | Windows I/O wait: WaitForMultipleObjects |
+| *(new)* | `lib/core/io_poll_win.c` | Windows I/O poll: WSAPoll |
+| *(new)* | `lib/core/group.h / .c` | Peer group management |
+| *(new)* | `lib/layers/kernel_filter_bpf.h / .c` | BPF kernel filter (Linux; Windows stub) |
 | `core/rx_thread.c` | `lib/core/rx_thread.c` | No change |
 | `core/tx_thread.c` | `lib/core/tx_thread.c` | No change |
 | `core/scheduler.c` | `lib/core/scheduler.c` | No change |

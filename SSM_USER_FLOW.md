@@ -12,11 +12,12 @@ can read a conversation after session keys are wiped.
 
 **Supported features:**
 - Encrypted chat (CH_CHAT, channel 3)
-- Audio calls (CH_AUDIO, channel 2) — Opus codec over arecord/aplay
-- Video calls (CH_VIDEO, channel 6) — V4L2 + ffmpeg JPEG capture
+- Audio calls (CH_AUDIO, channel 2) — Opus codec over arecord/aplay (Linux) or ffmpeg DirectShow (Windows)
+- Video calls (CH_VIDEO, channel 6) — V4L2+ffmpeg (Linux) or ffmpeg DirectShow (Windows) JPEG capture
 - File transfer (CH_FILE, channel 4) — chunked with checksum
 - PQ handshake, key rotation, LAN discovery, reconnect, FEC, multipath,
   port hopping, relay forwarding
+- Cross-platform: Linux (primary), Windows (MinGW cross-compile or native)
 
 ## 2. First Launch (Setup)
 
@@ -35,7 +36,7 @@ can read a conversation after session keys are wiped.
 
 ### 2.2 Persistent Identity
 
-- Identity is saved to `~/.config/ssm/` (auto-loaded on restart)
+- Identity is saved to `~/.config/ssm/` (Linux) or `%APPDATA%/ssm/` (Windows) (auto-loaded on restart)
 - Fields: username, display name, 256-bit HMAC identity key
 - On subsequent launches the login screen is **skipped** entirely
 
@@ -150,10 +151,10 @@ Context-sensitive keybinding hints appear on the last line:
 ## 6. Audio Calls (Ctrl+A)
 
 - Press `Ctrl+A` to start an audio call with a locked connection
-- Mic captured via `arecord |` pipe (48kHz mono S16_LE)
+- Mic captured via `arecord |` pipe (Linux, 48kHz mono S16_LE) or ffmpeg DirectShow (Windows `dshow`)
 - Encoded with Opus (20ms frames, 960 samples)
 - Encrypted on CH_AUDIO (channel 2)
-- Peer decodes and plays via `| aplay`
+- Peer decodes and plays via `| aplay` (Linux) or ffmpeg DirectShow (Windows)
 - Press `Ctrl+A` again to end the call
 - Incoming call shows popup: `[ Accept ] / [ Decline ]`
 
@@ -162,7 +163,7 @@ Status indicators: `[AUDIO]` in status bar when active.
 ## 7. Video Calls (Ctrl+V)
 
 - Press `Ctrl+V` to start a video call
-- Camera captured via V4L2 + ffmpeg → JPEG frames
+- Camera captured via V4L2 + ffmpeg (Linux) or ffmpeg DirectShow (Windows) → JPEG frames
 - Sent on CH_VIDEO (channel 6) at ~5fps
 - Received frames saved to `/tmp/ssm_video/frame_NNNNN.jpg`
 - Press `Ctrl+V` again to end
@@ -212,16 +213,17 @@ Status indicators: `[VIDEO]` in status bar when active.
 ## 11. Feature Matrix
 
 | Feature | Channel | Encrypted | Status |
-|---|---|---|---|
+|---|---|---|---|---|
 | Chat text | CH_CHAT (3) | ✅ AEAD | ✅ Done |
-| Audio call | CH_AUDIO (2) | ✅ AEAD | ✅ Done (Opus encode/decode) |
-| Video call | CH_VIDEO (6) | ✅ AEAD | ✅ Done (V4L2+ffmpeg capture) |
+| Audio call | CH_AUDIO (2) | ✅ AEAD | ✅ Done (Opus, arecord/dshow) |
+| Video call | CH_VIDEO (6) | ✅ AEAD | ✅ Done (V4L2/dshow+ffmpeg) |
 | File transfer | CH_FILE (4) | ✅ AEAD | ✅ Done (chunked) |
 | Relay / mesh | CH_ROUTE (5) | ✅ AEAD | ✅ Done |
 | Key rotation | CH_CONTROL | bypass | ✅ Done |
 | LAN discovery | — | — | ✅ Done (beacon broadcast) |
 | Online/offline | — | — | ✅ Done (30s timeout) |
 | Connection request | CH_CONTROL | bypass | ✅ Done (popup accept/decline) |
+| Cross-platform | — | — | ✅ Done (Linux + Windows MinGW) |
 
 ## 12. Flow Diagram
 

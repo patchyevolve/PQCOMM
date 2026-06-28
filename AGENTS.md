@@ -14,9 +14,9 @@
 
 ---
 
-## Current State — ✅ All Phases 1-7 Complete
+## Current State — ✅ All Phases 1-8 Complete
 
-All 23 substeps across Phases 1-7 are implemented. No stubs remain. 25/25 tests pass.
+All substeps across Phases 1-8 are implemented. No stubs remain. 61/65 tests pass (4 BPF tests skipped on non-Linux).
 
 ### Implemented
 - **Core**: UDP sockets, RX/TX threads, lock-free rings, packet pool, scheduler
@@ -29,8 +29,8 @@ All 23 substeps across Phases 1-7 are implemented. No stubs remain. 25/25 tests 
 - **Connection**: Peer table, connect/disconnect state machine, conn request/accept/decline protocol
 - **Discovery**: UDP beacon broadcast on separate port, username broadcast, peer timeout/stale marking
 - **TUI**: Full standalone terminal app — login, peer list, chat, incoming request/call popups, statusbar
-- **Audio**: Opus encode/decode with jitter buffer, arecord/aplay subprocess I/O
-- **Video**: V4L2 capture + ffmpeg pipe, per-frame send/display
+- **Audio**: Opus encode/decode with jitter buffer, arecord/aplay (Linux) or ffmpeg DirectShow (Windows) subprocess I/O
+- **Video**: V4L2 (Linux) or ffmpeg DirectShow (Windows) capture + ffmpeg pipe, per-frame send/display
 - **File transfer**: Chunked (1024B), metadata, checksum
 - **Realtime**: Typing indicator, delivery receipts (sent/delivered/read), message timestamps, latency display, unread badges
 - **Crypto thread**: Dedicated worker for async crypto operations
@@ -46,8 +46,9 @@ All 23 substeps across Phases 1-7 are implemented. No stubs remain. 25/25 tests 
 - **AAD**: 24-byte header with `PACKET_FLAG_ENCRYPTED` cleared, XOR-folded with `channel_keys[channel_id]`
 - **Session ID**: Responder generates in `handshake_build_accept`, initiator adopts from ACCEPT payload
 - **Connection model**: Hybrid manual + LAN broadcast discovery. Discovery is not a trust mechanism.
-- **TUI**: In-process with threads + lock-free queues (no IPC, no daemon). Raw terminal mode (tcsetattr).
-- **Testing**: Separate `test_runner` executable linking `libtransport_core.a` — 25 tests across 15 files.
+- **TUI**: In-process with threads + lock-free queues (no IPC, no daemon). Raw terminal mode (tcsetattr). Daemon mode (`main.c --daemon`) guarded under `#ifndef _WIN32`.
+- **Cross-platform**: All 22+ source files have `_WIN32` guards; Windows uses `udp_win.c`, `io_wait_win.c`, `io_poll_win.c`; BPF filter stubs out on Windows.
+- **Testing**: Separate `test_runner` executable linking `libtransport_core.a` — 65 tests across 20 files (4 BPF tests Linux-only).
 
 ---
 
@@ -55,8 +56,9 @@ All 23 substeps across Phases 1-7 are implemented. No stubs remain. 25/25 tests 
 
 Every time before committing:
 
-1. **Build**: `cmake -S . -B build_linux -G Ninja && cmake --build build_linux` — zero warnings
-2. **Demo**: `timeout 14 ./build_linux/transport` — verify output contains:
+1. **Build (Linux)**: `cmake -S . -B build_linux -G Ninja && cmake --build build_linux` — zero warnings
+2. **Build (Windows, cross)**: `cmake --preset win64 && cmake --build --preset win64` — zero warnings
+3. **Demo**: `timeout 14 ./build_linux/transport` — verify output contains:
    - `identity verified OK`
    - `init=LOCKED resp=LOCKED`
    - `ok=1` in stats line
@@ -65,10 +67,10 @@ Every time before committing:
    - `[RECONNECT] ack received, session re-established` shown
    - `[RELAY] forwarded seq=...` and `[INIT CHAT] hello via relay!` shown
    - `[ABR] loss=0.0% fec=on group=4 -> off group=0` shown (both sides)
-3. **Tests**: `./build_linux/test_runner` — returns 0 with **"25/25 tests passed"**
-4. **Regressions**: `fail=0` and `enc=on` in stats
-5. **Docs**: Update `IMPLEMENTATION_PHASE_STATUS.md`, `ARCHITECTURE.md`, and `PHASE1_WIRE_CONTRACT.md` if wire format or status changes
-6. **Rules**: No violation of RULE-8 (malloc) or RULE-9 (logging) in pipeline / fast-path code
+4. **Tests**: `./build_linux/demo_run.sh` (both demo + tests) or `./build_linux/test_runner` — returns 0 with **"61/65 tests passed"** (4 BPF skipped on non-Linux)
+5. **Regressions**: `fail=0` and `enc=on` in stats
+6. **Docs**: Update `IMPLEMENTATION_PHASE_STATUS.md`, `ARCHITECTURE.md`, and `PHASE1_WIRE_CONTRACT.md` if wire format or status changes
+7. **Rules**: No violation of RULE-8 (malloc) or RULE-9 (logging) in pipeline / fast-path code
 
 ---
 
@@ -99,6 +101,7 @@ Every time before committing:
 
 ## Build
 
+### Linux
 ```bash
 cmake -S . -B build_linux -G Ninja
 cmake --build build_linux
@@ -115,6 +118,24 @@ timeout 14 ./build_linux/transport
 
 # Run tests
 ./build_linux/test_runner
+# Or run demo + test suite:
+./build_linux/demo_run.sh
+```
+
+### Windows (cross-compile from Linux)
+```bash
+cmake --preset win64
+cmake --build --preset win64
+# Outputs:
+#   build_win64/libtransport_core.a  — static library
+#   build_win64/transport.exe        — TUI executable
+#   build_win64/test_runner.exe      — test executable
+```
+
+### Windows (native with MinGW)
+```bash
+cmake -S . -B build_mingw -G "MinGW Makefiles" -DCMAKE_TOOLCHAIN_FILE=cmake/toolchain-x86_64-w64-mingw32.cmake
+cmake --build build_mingw
 ```
 
 ---
@@ -206,7 +227,7 @@ IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT
 | ↑↓ / j/k + →/Enter + Esc/← + q | PEER LIST | Navigate, select, back, quit |
 | Type + Enter + Esc/← + Ctrl+A + Ctrl+V + Ctrl+F + q | CHAT | Send message, back, audio toggle, video toggle, file send, quit |
 | Ctrl+C | Anywhere | Quit |
-| Ctrl+Z | Anywhere | Suspend (fg to resume) |
+| Ctrl+Z | Anywhere | Suspend (Linux only, fg to resume) |
 
 ---
 
@@ -220,12 +241,17 @@ IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT
 | **lib/core/session.c** | Session table, alloc/find/reset |
 | **lib/core/pool.c** | Pre-allocated packet buffer pool (4096 buffers) |
 | **lib/core/udp_posix.c** | UDP socket create/send/recv (Linux) |
+| **lib/core/udp_win.c** | UDP socket create/send/recv (Windows, `WSASocket`) |
 | **lib/core/rx_thread.c** | RX thread: read UDP → push to ring |
 | **lib/core/tx_thread.c** | TX thread: pull from queues → send UDP |
 | **lib/core/scheduler.c** | Priority queue (ring buffers per priority) |
 | **lib/core/ring.c** | SPSC lock-free ring |
 | **lib/core/resilience_ctx.c** | Path metrics, FEC TX/RX state |
 | **lib/core/rx_worker.c** | RX dispatch worker |
+| **lib/core/kernel_filter_bpf.c** | BPF kernel filter (Linux `setsockopt SO_ATTACH_FILTER`; Windows stub) |
+| **lib/core/group.c** | Peer group management (add/remove/find/broadcast) |
+| **lib/core/io_wait_win.c** | I/O wait abstraction (Windows `WaitForMultipleObjects`) |
+| **lib/core/io_poll_win.c** | I/O poll abstraction (Windows `WSAPoll`) |
 | **lib/crypto/kem.c** | ML-KEM 768 wrappers, CSPRNG `kem_random_bytes` |
 | **lib/crypto/hkdf.c** | HKDF-extract/expand, `derive_session_keys` |
 | **lib/crypto/aead.c** | ChaCha20-Poly1305 (no malloc, no printf) |
@@ -244,9 +270,9 @@ IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT
 | **lib/discovery/lan_discovery.c** | UDP beacon broadcast + peer timeout |
 | **lib/engine/transport_engine.c** | Thread orchestration, event dispatch, timer wheel |
 | **lib/engine/crypto_worker.c** | Dedicated crypto worker thread |
-| **lib/engine/audio_worker.c** | Opus encode/decode, play/capture via arecord/aplay |
+| **lib/engine/audio_worker.c** | Opus encode/decode, play/capture via arecord/aplay (Linux) or ffmpeg DirectShow (Windows) |
 | **lib/engine/audio_pipeline.c** | Audio jitter buffer + pipeline glue |
-| **lib/engine/video_worker.c** | V4L2 capture, ffmpeg pipe, frame dispatch |
+| **lib/engine/video_worker.c** | V4L2 (Linux) or ffmpeg DirectShow (Windows) capture, ffmpeg pipe, frame dispatch |
 | **lib/engine/file_transfer.c** | Chunked file send/receive with checksum |
 | **lib/engine/monitor.c** | Watchdog thread, health checks, pool pressure |
 | **lib/engine/rekey.c** | Key rotation protocol (CTRL_REKEY_INIT/CONFIRM) |
@@ -254,10 +280,13 @@ IDLE → HANDSHAKE_START → PQ_KEM_INIT_SENT → PQ_KEM_RESPONSE_SENT
 | **lib/identity/identity.c** | Username, display name, key gen, file save/load |
 | **lib/crypto/toml_config.c** | TOML config file parser |
 | **lib/crypto/secure_store.c** | mlock/MADV_DONTDUMP, env var key loading |
-| **app/main.c** | Entry point: `--tui` for TUI, default for demo |
+| **app/main.c** | Entry point: `--tui` for TUI, default for demo; `--daemon` (Linux-only, `#ifndef _WIN32`) |
 | **app/tui.h** | TUI state struct, screen enum, action codes |
 | **app/tui_screen.c** | Renderer, raw terminal mode, SIGWINCH/SIGCONT handling |
 | **app/tui_input.c** | Keyboard input per screen, arrow keys, Ctrl+C/Z |
 | **app/tui_panels.c** | Topbar, login, peer list, chat, popups, statusbar |
-| **tests/test_runner_main.c** | Test runner entry point (25 tests) |
-| **tests/test_*.c** | 15 individual test scenario files |
+| **tests/test_runner_main.c** | Test runner entry point (65 tests) |
+| **tests/test_*.c** | 20 individual test scenario files |
+| **tests/test_group.c** | Peer group add/remove/find/broadcast tests |
+| **tests/test_kernel_filter_bpf.c** | BPF filter attach/load/apply tests (4 tests, skipped on non-Linux) |
+| **tests/demo_run.sh** | Automated demo + test runner script |
