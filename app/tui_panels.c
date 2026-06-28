@@ -305,14 +305,18 @@ int tui_panel_statusbar(tui_t* t, char* buf, int max)
     if (t->screen == SCREEN_CHAT && t->conn_info.state == CONN_LOCKED) {
         char hints[192] = "";
         snprintf(hints, sizeof(hints),
-                 "\033[1;30m [Esc:back] %s %s [Ctrl+F:file]\033[0m",
+                 "\033[1;30m [\xe2\x86\x90/ Esc:back] %s %s [Ctrl+F:file] [q:quit]\033[0m",
                  t->audio_active ? "[Ctrl+A:end]" : "[Ctrl+A:audio]",
                  t->video_active ? "[Ctrl+V:end]" : "[Ctrl+V:video]");
         n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
                       "\033[%d;%dH%s", t->height, 1, hints);
     } else if (t->screen == SCREEN_PEER_LIST) {
         n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
-                      "\033[%d;%dH\033[1;30m [j/k:nav] [Enter:select] [q:quit]\033[0m",
+                      "\033[%d;%dH\033[1;30m [\xe2\x86\x91\xe2\x86\x93/j/k:nav] [\xe2\x86\x92/Enter:select] [\xe2\x86\x90/Esc:back] [r:refresh] [q:quit]\033[0m",
+                      t->height, 1);
+    } else if (t->screen == SCREEN_CHAT && t->conn_info.state != CONN_LOCKED) {
+        n += snprintf(buf + n, (size_t)(max - n > 0 ? max - n : 0),
+                      "\033[%d;%dH\033[1;30m [\xe2\x86\x90/Esc:back] [Type:message] [Enter:send]\033[0m",
                       t->height, 1);
     }
 

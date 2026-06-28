@@ -1,5 +1,6 @@
 #pragma once
 #include <time.h>
+#include <termios.h>
 #include "transport_api.h"
 #include "identity.h"
 
@@ -19,9 +20,30 @@ typedef struct {
 #define TUI_INPUT_BUF 256
 #define TUI_MAX_PEERS 32
 
+typedef enum {
+    TUI_ACTION_NONE = 0,
+    TUI_ACTION_QUIT,
+    TUI_ACTION_LOGIN_SUBMIT,
+    TUI_ACTION_PEER_SELECT,   /* data = peer index */
+    TUI_ACTION_CHAT_SEND,     /* data = input length */
+    TUI_ACTION_CONN_ACCEPT,
+    TUI_ACTION_CONN_DECLINE,
+    TUI_ACTION_CALL_ACCEPT,
+    TUI_ACTION_CALL_DECLINE,
+    TUI_ACTION_AUDIO_TOGGLE,
+    TUI_ACTION_VIDEO_TOGGLE,
+    TUI_ACTION_FILE_SEND,
+    TUI_ACTION_GO_BACK,
+} tui_action_t;
+
 typedef struct {
     int width, height;
     int dirty;
+    int resize_dirty;
+
+    /* terminal */
+    struct termios orig_termios;
+    int term_raw;
 
     /* screen state */
     screen_t screen;
@@ -89,12 +111,13 @@ typedef struct {
 } tui_t;
 
 void tui_init(tui_t* t);
-void tui_term_init(void);
+void tui_term_init(tui_t* t);
 void tui_term_restore(void);
 void tui_render(tui_t* t);
 int tui_poll_input(tui_t* t, int timeout_ms);
 void tui_add_chat(tui_t* t, const char* text, uint16_t port, int is_self);
 void tui_add_chat_with_seq(tui_t* t, const char* text, uint16_t port, int is_self, uint32_t seq);
 void tui_update_info(tui_t* t, conn_info_t* info);
+void tui_suspend(tui_t* t);
 void tui_add_log(tui_t* t, const char* msg);
 void tui_shutdown(tui_t* t);

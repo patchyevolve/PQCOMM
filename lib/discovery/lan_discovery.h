@@ -1,9 +1,10 @@
 #pragma once
 #include <stdint.h>
 
-int lan_discovery_init(uint16_t port);
+int lan_discovery_init(uint16_t disc_port, uint16_t transport_port);
 void lan_discovery_shutdown(void);
 int lan_discovery_start(void);
 void lan_discovery_stop(void);
 void lan_discovery_trigger_scan(void);
 void lan_discovery_set_username(const char* username);
+uint16_t lan_discovery_get_port(void);

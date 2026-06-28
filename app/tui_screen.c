@@ -4,7 +4,34 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
+#include <signal.h>
 #include <time.h>
+
+static volatile sig_atomic_t g_resize_flag = 0;
+static tui_t* g_tui_global = NULL;
+
+static void sigwinch_handler(int sig)
+{
+    (void)sig;
+    g_resize_flag = 1;
+}
+
+static void sigcont_handler(int sig)
+{
+    (void)sig;
+    if (g_tui_global) {
+        /* re-enter raw mode after SIGCONT (Ctrl+Z resume) */
+        struct termios raw = g_tui_global->orig_termios;
+        raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+        raw.c_oflag &= ~(OPOST);
+        raw.c_cflag |= (CS8);
+        raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+        raw.c_cc[VMIN] = 0;
+        raw.c_cc[VTIME] = 1;
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+        g_tui_global->dirty = 1;
+    }
+}
 
 void tui_init(tui_t* t)
 {
@@ -17,16 +44,50 @@ void tui_init(tui_t* t)
     t->login_field = 0;
     t->input_active = 1;
     t->typing_tick = 0;
+    g_tui_global = t;
 }
 
-void tui_term_init(void)
+void tui_term_init(tui_t* t)
 {
+    /* save original and set raw mode */
+    tcgetattr(STDIN_FILENO, &t->orig_termios);
+    struct termios raw = t->orig_termios;
+    raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= ~(OPOST);
+    raw.c_cflag |= (CS8);
+    raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 1;
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    t->term_raw = 1;
+
+    /* SIGWINCH handler for resize */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigwinch_handler;
+    sigaction(SIGWINCH, &sa, NULL);
+
+    /* SIGCONT handler for Ctrl+Z resume */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigcont_handler;
+    sigaction(SIGCONT, &sa, NULL);
+
+    /* hide cursor, clear screen */
     write(STDOUT_FILENO, "\033[?25l\033[2J\033[H", 12);
 }
 
 void tui_term_restore(void)
 {
-    write(STDOUT_FILENO, "\033[?25h\033[2J\033[H", 12);
+    write(STDOUT_FILENO, "\033[2J\033[H\033[?25h", 12);
+}
+
+void tui_suspend(tui_t* t)
+{
+    /* restore terminal before suspending */
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &t->orig_termios);
+    t->term_raw = 0;
+    write(STDOUT_FILENO, "\033[?25h", 5);
+    raise(SIGTSTP);
 }
 
 void tui_add_chat(tui_t* t, const char* text, uint16_t port, int is_self)
@@ -58,7 +119,7 @@ void tui_add_chat_with_seq(tui_t* t, const char* text, uint16_t port, int is_sel
         cl->is_self = is_self;
         cl->timestamp = time(NULL);
         cl->seq = seq;
-        cl->status = 0; /* sent */
+        cl->status = 0;
     }
     t->dirty = 1;
 }
@@ -79,7 +140,11 @@ void tui_add_log(tui_t* t, const char* msg)
 
 void tui_shutdown(tui_t* t)
 {
-    (void)t;
+    if (t->term_raw) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &t->orig_termios);
+        t->term_raw = 0;
+    }
+    g_tui_global = NULL;
     tui_term_restore();
 }
 
@@ -94,7 +159,11 @@ static void get_term_size(int* w, int* h)
 
 void tui_render(tui_t* t)
 {
-    if (!t->dirty) return;
+    if (!t->dirty && !g_resize_flag) return;
+    if (g_resize_flag) {
+        g_resize_flag = 0;
+        t->dirty = 1;
+    }
     t->dirty = 0;
     get_term_size(&t->width, &t->height);
     if (t->width < 60) t->width = 60;

@@ -250,7 +250,7 @@ int transport_engine_init(transport_engine_t* eng, const transport_config_t* con
     }
 
     if (config->discovery_enabled) {
-        if (lan_discovery_init(config->discovery_port) == 0) {
+        if (lan_discovery_init(config->discovery_port, config->local_port) == 0) {
             lan_discovery_start();
         }
     }

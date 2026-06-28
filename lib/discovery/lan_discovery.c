@@ -23,17 +23,21 @@ static udp_socket_t g_disc_sock;
 static int g_initialized = 0;
 static int g_running = 0;
 static uint16_t g_local_transport_port = 0;
+static uint16_t g_discovery_port = 0;
 static char g_local_username[32] = "";
 
 static int g_broadcast_sock = -1;
 
-int lan_discovery_init(uint16_t port)
+uint16_t lan_discovery_get_port(void) { return g_discovery_port; }
+
+int lan_discovery_init(uint16_t disc_port, uint16_t transport_port)
 {
     if (g_initialized) return -1;
-    g_local_transport_port = port;
+    g_discovery_port = disc_port;
+    g_local_transport_port = transport_port;
 
-    if (udp_socket_create(&g_disc_sock, port) != 0) {
-        printf("[DISCOVERY] failed to bind on port %u\n", port);
+    if (udp_socket_create(&g_disc_sock, disc_port) != 0) {
+        printf("[DISCOVERY] failed to bind on port %u\n", disc_port);
         return -1;
     }
 
@@ -101,7 +105,7 @@ static void send_beacon(void)
     struct sockaddr_in bc_addr;
     memset(&bc_addr, 0, sizeof(bc_addr));
     bc_addr.sin_family = AF_INET;
-    bc_addr.sin_port = htons(g_local_transport_port);
+    bc_addr.sin_port = htons(g_discovery_port);
     bc_addr.sin_addr.s_addr = INADDR_BROADCAST;
 
     sendto(g_broadcast_sock, (const char*)msg, msg_len, 0,
@@ -138,27 +142,35 @@ static int try_recv_beacon(void)
         memcpy(username, buf + 8, uname_len);
 
     char addr_str[64];
+    addr_str[0] = '\0';
     if (from_addr.sin6_family == AF_INET6) {
-        if (inet_ntop(AF_INET6, &from_addr.sin6_addr, addr_str, sizeof(addr_str))) {
-            if (strcmp(addr_str, "::1") == 0) return 1;
-            peer_t* existing = NULL;
-            int count = 0;
-            peer_t* peers = connection_manager_get_peers(&count);
-            for (int i = 0; i < count; i++) {
-                if (strcmp(peers[i].addr_str, addr_str) == 0 && peers[i].port == port) {
-                    existing = &peers[i];
-                    break;
-                }
-            }
-            uint64_t now_ms = (uint64_t)time(NULL) * 1000;
-            if (!existing) {
-                connection_manager_connect(addr_str, port);
-            }
-            if (username[0])
-                connection_manager_set_username(addr_str, port, username);
-            connection_manager_update_last_seen(addr_str, port, now_ms);
+        inet_ntop(AF_INET6, &from_addr.sin6_addr, addr_str, sizeof(addr_str));
+    } else if (from_addr.sin6_family == AF_INET) {
+        struct sockaddr_in* v4 = (struct sockaddr_in*)&from_addr;
+        inet_ntop(AF_INET, &v4->sin_addr, addr_str, sizeof(addr_str));
+    }
+    if (addr_str[0] == '\0') return 1;
+
+    /* skip self-broadcast echo */
+    if (strcmp(addr_str, "::1") == 0 || strcmp(addr_str, "127.0.0.1") == 0)
+        return 1;
+
+    peer_t* existing = NULL;
+    int count = 0;
+    peer_t* peers = connection_manager_get_peers(&count);
+    for (int i = 0; i < count; i++) {
+        if (strcmp(peers[i].addr_str, addr_str) == 0 && peers[i].port == port) {
+            existing = &peers[i];
+            break;
         }
     }
+    uint64_t now_ms = (uint64_t)time(NULL) * 1000;
+    if (!existing) {
+        connection_manager_connect(addr_str, port);
+    }
+    if (username[0])
+        connection_manager_set_username(addr_str, port, username);
+    connection_manager_update_last_seen(addr_str, port, now_ms);
     return 1;
 }
 

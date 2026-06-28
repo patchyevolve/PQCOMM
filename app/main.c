@@ -72,7 +72,7 @@ static int run_tui(int argc, char** argv)
 {
     tui_t tui;
     tui_init(&tui);
-    tui_term_init();
+    tui_term_init(&tui);
 
     /* try loading existing identity */
     identity_t id;
@@ -231,6 +231,26 @@ static int run_tui(int argc, char** argv)
 
         /* poll input */
         int input = tui_input_poll(&tui, 200);
+        if (input >= 1 && tui.input_len > 0) {
+            tui.input_buf[tui.input_len] = '\0';
+            if (strncmp(tui.input_buf, "/connect ", 9) == 0) {
+                char ip[64] = {0};
+                int port = 0;
+                if (sscanf(tui.input_buf + 9, "%63s %d", ip, &port) == 2 && port > 0 && port < 65536) {
+                    transport_send_connect_request(ip, (uint16_t)port,
+                                                    tui.username, tui.display_name);
+                    tui.screen = SCREEN_CHAT;
+                    snprintf(tui.chat_partner, sizeof(tui.chat_partner), "%s:%d", ip, port);
+                    tui_add_chat(&tui, "Connection request sent...", 0, 0);
+                } else {
+                    tui_add_chat(&tui, "Usage: /connect <ip> <port>", 0, 0);
+                }
+                tui.input_len = 0;
+                tui.input_pos = 0;
+                tui.dirty = 1;
+                goto done_input;
+            }
+        }
         if (input == -10 && tui.screen == SCREEN_LOGIN) {
             /* login submitted */
             identity_create(&id, path, tui.login_username,
@@ -242,7 +262,8 @@ static int run_tui(int argc, char** argv)
             snprintf(tui.login_display, sizeof(tui.login_display), "%s", id.display_name);
             tui.screen = SCREEN_PEER_LIST;
             tui.dirty = 1;
-            start_transport(&tui, argc, argv);
+            if (!g_transport_started)
+                start_transport(&tui, argc, argv);
         } else if (input == 1 && tui.conn_info.state == CONN_LOCKED) {
             /* Enter pressed in chat with non-empty input — send chat */
             tui.input_buf[input] = '\0';
@@ -372,6 +393,7 @@ static int run_tui(int argc, char** argv)
             }
         }
 
+done_input:
         tui_render(&tui);
         frame++;
     }
